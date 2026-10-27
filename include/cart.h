@@ -8,9 +8,9 @@ typedef enum MemLayout {
 	ML_HIROM   = 1,
 	ML_S_DD1   = 2,
 	ML_SA_1    = 3,
+	ML_EXLOROM = 4,
 	ML_EXHIROM = 5,
 	ML_SPC7110 = 10,
-	// EXLOROM ??
 } MemLayout;
 
 typedef enum Chipset {
@@ -23,7 +23,7 @@ typedef enum Chipset {
 	CS_ROM_COP_BAT     = 6,
 } Chipset;
 
-typedef enum Coprocessor {
+typedef enum Coproc {
 	CP_DSP    = 0, // DSP-1, 2, 3, or 4
 	CP_GSU    = 1, // superfx
 	CP_OBC1   = 2,
@@ -32,14 +32,14 @@ typedef enum Coprocessor {
 	CP_S_RTC  = 5,
 	CP_OTHER  = 14,
 	CP_CUSTOM = 15,
-} Coprocessor;
+} Coproc;
 
-typedef enum CoprocessorCustom {
+typedef enum CoprocCustom {
 	CP_SPC7110 = 0,
 	CP_ST010   = 1,
 	CP_ST018   = 2,
 	CP_CX4     = 3,
-} CoprocessorCustom;
+} CoprocCustom;
 
 typedef enum CountryCode {
 	CC_JAPAN         = 0,
@@ -65,56 +65,63 @@ typedef enum CountryCode {
 	CC_OTHER_VAR_3   = 20,
 } CountryCode;
 
-typedef struct Cart {
-	union {
-		uint8_t raw[64];
-		struct {
-			char title[21]; // ffc0
-			MemLayout layout    : 4; // ffd5
-			bool speed          : 1; // -
-			uint8_t magic       : 3; // -
-			Chipset chipset     : 4; // ffd6
-			Coprocessor coproc  : 4; // -
-			uint8_t rom_size    : 8; // ffd7
-			uint8_t ram_size    : 8; // ffd8
-			CountryCode country : 8; // ffd9
-			uint8_t dev_id      : 8; // ffda
-			uint8_t rom_ver     : 8; // ffdb
-			uint16_t csum_comp  : 16; // ffdc
-			uint16_t csum       : 16; // ffde
-			uint16_t vec_pad    : 16; // ffe0
-			uint16_t vec_pad2   : 16; // ffe2
-			uint16_t vec_cop    : 16; // ffe4
-			uint16_t vec_brk    : 16; // ffe6
-			uint16_t vec_abort  : 16; // ffe8
-			uint16_t vec_nmi    : 16; // ffea
-			uint16_t vec_unused : 16; // ffec
-			uint16_t vec_irq    : 16; // ffee
-			uint16_t vece_pad   : 16; // fff0
-			uint16_t vece_pad2  : 16; // fff2
-			uint16_t vece_cop   : 16; // ffe4
-			uint16_t vece_none  : 16; // ffe6
-			uint16_t vece_abort : 16; // fff8
-			uint16_t vece_nmi   : 16; // fffa
-			uint16_t vece_reset : 16; // fffc
-			uint16_t vece_irq   : 16; // fffe
-		};
-	} header;
+typedef struct RomHeader {
+	char maker[2];           // ffb0
+	char game[4];            // ffb2
+	uint8_t reserved[6];     // ffb6
+	uint8_t exp_flash_size : 8; // ffbc
+	uint8_t exp_ram_size : 8; // ffbd
+	uint8_t special_ver : 8; // ffbe
+	CoprocCustom cs_sub : 8; // ffbf
+	char title[21];          // ffc0
+	MemLayout layout    : 4; // ffd5
+	bool fastrom        : 1; // -
+	uint8_t magic       : 3; // -
+	Chipset chipset     : 4; // ffd6
+	Coproc coproc       : 4; // -
+	uint8_t rom_size    : 8; // ffd7
+	uint8_t sram_size   : 8; // ffd8
+	CountryCode country : 8; // ffd9
+	uint8_t dev_id      : 8; // ffda
+	uint8_t rom_ver     : 8; // ffdb
+	uint16_t csum_comp  : 16; // ffdc
+	uint16_t csum       : 16; // ffde
+	uint16_t vec_pad    : 16; // ffe0
+	uint16_t vec_pad2   : 16; // ffe2
+	uint16_t vec_cop    : 16; // ffe4
+	uint16_t vec_brk    : 16; // ffe6
+	uint16_t vec_abort  : 16; // ffe8
+	uint16_t vec_nmi    : 16; // ffea
+	uint16_t vec_unused : 16; // ffec
+	uint16_t vec_irq    : 16; // ffee
+	uint16_t vece_pad   : 16; // fff0
+	uint16_t vece_pad2  : 16; // fff2
+	uint16_t vece_cop   : 16; // ffe4
+	uint16_t vece_none  : 16; // ffe6
+	uint16_t vece_abort : 16; // fff8
+	uint16_t vece_nmi   : 16; // fffa
+	uint16_t vece_reset : 16; // fffc
+	uint16_t vece_irq   : 16; // fffe
+} RomHeader;
 
-	union {
-		uint8_t raw[16];
-		struct {
-			char maker[2]; // ffb0
-			char game[4]; // ffb2
-			uint8_t reserved[6]; // ffb6
-			uint8_t expansion_flash_size; // ffbc
-			uint8_t expansion_ram_size; // ffbd
-			uint8_t special_ver; // ffbe
-			CoprocessorCustom chipset_sub; // ffbf
-		};
-	} header_expanded;
+
+typedef struct Cart {
+
+	RomHeader header;
+	uint32_t header_offset;
+
+	bool bad_header;
+
+	MemLayout layout;
+	bool fastrom;
+	bool battery;
+	bool has_sram;
+
+	uint32_t rom_size;
+	uint32_t sram_size;
 
 	uint8_t *rom;
+	uint8_t *sram;
 
 } Cart;
 

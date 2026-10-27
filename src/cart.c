@@ -7,6 +7,110 @@
 
 #include "log.h"
 
+
+int header_score(uint8_t *rom, uint32_t addr, uint32_t rom_size) {
+	// thanks mesen for the code
+	// snes header detection is hard
+
+	if (rom_size < addr + 0x7fff) {
+		return -1; // too small
+	}
+
+	RomHeader header;
+
+	memcpy(&header, rom + addr + 0x7fb0, sizeof(header));
+
+	// check reset vector
+	if (header.vece_reset < 0x8000) {
+		return -1;
+	}
+
+	int score = 0;
+
+	// check magic
+	if (header.magic == 1)
+		score++;
+
+	// check layout
+	if ((header.layout == ML_LOROM || header.layout == ML_S_DD1)
+		&& (addr & 0x3fffff) < 0x8000) {
+		score++;
+	} else if ((header.layout == ML_HIROM || header.layout == ML_EXHIROM)
+		&& (addr & 0x3fffff) >= 0x8000) {
+		score++;
+	}
+
+	// rom type is more likely to have low chipset and no coprocessor
+	if (!header.coproc && (header.chipset < 8)) {
+		score++;
+	}
+
+	// romsize should be < 10
+	if (header.rom_size < 0x10) {
+		score++;
+	}
+
+	// ramsize should be < 8
+	if (header.sram_size < 0x08) {
+		score++;
+	}
+
+	// checksum validation
+	if ((header.csum ^ header.csum_comp) == 0xffff
+		&& header.csum != 0 && header.csum_comp != 0) {
+		score += 8;
+	}
+
+	// check opcode at reset vector
+	uint8_t op = rom[addr + (header.vece_reset & 0x7FFF)];
+	switch (op) {
+		case 0x18:
+		case 0x78:
+		case 0x4c:
+		case 0x5c:
+		case 0x20:
+		case 0x22:
+		case 0x9c:
+			score += 8;
+			break;
+		case 0xc2:
+		case 0xe2:
+		case 0xa9:
+		case 0xa2:
+		case 0xa0:
+			score += 4;
+			break;
+		case 0x00:
+		case 0xff:
+		case 0xcc:
+			score -= 8;
+			break;
+		default:
+			break;
+	}
+
+	return score;
+}
+
+bool corrupted_header(RomHeader *header) {
+	// more code from mesen
+	int badHeaderCounter =
+		((header->sram_size & 0xf0) != 0)
+		+ (header->chipset == 0xf && header->coproc == 0xf)
+		+ (header->country == 0xff)
+		+ (header->dev_id == 0xff)
+		+ (header->rom_size == 0xff)
+		+ (header->layout == 0xf && header->fastrom == 1 && header->magic == 0x7);
+	return badHeaderCounter > 2;
+}
+
+static uint32_t base_addresses[] = {
+	0,
+	0x8000,
+	0x400000,
+	0x408000,
+};
+
 bool cart_init(Cart *cart, char *filename) {
 
 	FILE *file = fopen(filename, "rb");
@@ -21,7 +125,7 @@ bool cart_init(Cart *cart, char *filename) {
 
 	ldeb1("cart: file size: %d\n", (int)file_size);
 
-	if (file_size < 256 << 10) {
+	if (file_size < 0x8000) {
 		// less than minimum
 		lerror("cart: file too small\n");
 		fclose(file);
@@ -33,40 +137,12 @@ bool cart_init(Cart *cart, char *filename) {
 	file_size -= copier_offset;
 
 	if (copier_offset > 0) {
-		linfo("cart: detected 512-byte copier header\n");
+		ldeb1("cart: removed 512 byte copier header\n");
+		ldeb1("cart: new file size: %d\n", (int)file_size);
 	}
 
-	uint16_t checksum_buf[4];
-	// try lorom
-	fseek(file, 0x7fdc + copier_offset, SEEK_SET);
-	fread(checksum_buf, 2, 2, file);
-	// try hirom
-	fseek(file, 0xffdc + copier_offset, SEEK_SET);
-	fread(checksum_buf + 2, 2, 2, file);
-
-	bool is_hirom;
-	if ((checksum_buf[0] ^ checksum_buf[1]) == 0xffff) { // lorom
-		ldeb1("cart: valid checksum proves lorom\n");
-		is_hirom = false;
-	} else if ((checksum_buf[2] ^ checksum_buf[3]) == 0xffff) { // hirom
-		ldeb1("cart: valid checksum proves hirom\n");
-		is_hirom = true;
-	} else {
-		lerror("cart: file checksum not found\n");
-		fclose(file);
-		return false;
-	}
-
-	fseek(file, (is_hirom ? 0xffc0 : 0x7fc0) + copier_offset, SEEK_SET);
-	fread(cart->header.raw, 1, 64, file);
-
-	if (cart->header.dev_id == 0xee) {
-		ldeb1("cart: has expanded header");
-		fseek(file, (is_hirom ? 0xffb0 : 0x7fb0) + copier_offset, SEEK_SET);
-		fread(cart->header_expanded.raw, 1, 16, file);
-	}
-
-	size_t rom_size = (1 << 10) << cart->header.rom_size;
+	// load full rom
+	size_t rom_size = 1 << (32 - __builtin_clz(file_size - 1)); // next power of 2
 	ldeb1("cart: rom size: %d\n", (int)rom_size);
 
 	cart->rom = malloc(rom_size);
@@ -93,7 +169,7 @@ bool cart_init(Cart *cart, char *filename) {
 			for (; i < large_bank; i++)
 				cart->rom[large_bank + i] = 0;
 		}
-		// copy small bank until size of large bank
+		// double small bank until size of large bank
 		for (; small_bank < large_bank; small_bank <<= 1) {
 			memcpy(
 				cart->rom + large_bank + small_bank,
@@ -104,6 +180,64 @@ bool cart_init(Cart *cart, char *filename) {
 	}
 
 	fclose(file);
+
+	// find header
+	int best_score = -1;
+	bool is_lorom = true;
+	bool is_exrom = true;
+
+	for (int i = 0; i < 4; i++) {
+		uint32_t base = base_addresses[i];
+		int32_t score = header_score(cart->rom, base, rom_size);
+		if (score >= 0 && score >= best_score) {
+			best_score = score;
+			is_lorom = (base & 0x8000) == 0;
+			is_exrom = (base & 0x400000) != 0;
+			cart->header_offset = base + 0x7fb0;
+			memcpy(&cart->header, cart->rom + cart->header_offset, sizeof(RomHeader));
+		}
+	}
+
+	cart->rom_size = rom_size;
+
+	cart->bad_header = corrupted_header(&cart->header);
+
+	cart->layout = (
+		is_lorom ?
+		(is_exrom ? ML_EXLOROM : ML_LOROM ) :
+		(is_exrom ? ML_EXHIROM : ML_HIROM )
+	);
+
+	if ((cart->header.layout & 0x7) == ML_EXHIROM)
+		cart->layout = ML_EXHIROM;
+
+	cart->fastrom = cart->header.fastrom;
+
+	switch (cart->header.chipset) {
+		case CS_ROM_COP:
+		case CS_ROM_COP_RAM:
+		case CS_ROM_COP_RAM_BAT:
+		case CS_ROM_COP_BAT:
+			lerror("cart: rom with coprocessor is unimplemented\n");
+			free(cart->rom);
+			return false;
+		case CS_ROM_RAM_BAT:
+			cart->battery = true;
+			// fallthrough
+		case CS_ROM_RAM:
+			cart->has_sram = true;
+			break;
+		default:
+			break;
+	}
+
+	cart->has_sram = cart->header.sram_size != 0;
+	if (cart->has_sram) {
+		cart->sram_size = (1 << 10) << cart->header.sram_size;
+		cart->sram = malloc(cart->sram_size);
+	}
+
+	if (cart->bad_header) lwarn("cart: header likely corrupt\n");
 
 	linfo("cart: name: %.*s\n", 21, cart->header.title);
 
