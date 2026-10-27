@@ -25,14 +25,14 @@ or use
 
 todo:
 - [ ] checklist is accurate
-- [ ] cart loading
-- [ ] bus
+- [X] cart loading
+- [X] bus
   - [ ] lorom
   - [ ] hirom
   - [ ] exhirom
   - [ ] exlorom
 - [ ] cpu
-  - [ ] research differences from 6502
+  - [X] research differences from 6502
   - [ ] official opcodes
   - [ ] interrupts
   - [ ] mmio registers

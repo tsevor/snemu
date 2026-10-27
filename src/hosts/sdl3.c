@@ -103,7 +103,7 @@ int host_init() {
 
 	// audio
 	SDL_AudioSpec spec = {
-		.freq = 44100,
+		.freq = 32000,
 		.format = SDL_AUDIO_S16,
 		.channels = 1,
 	};
@@ -143,8 +143,9 @@ void host_frame() {
 	while (SDL_PollEvent(&e)) {
 		switch (e.type) {
 			case SDL_EVENT_QUIT:
-				host_exit(0);
-				break;
+				host_exit();
+				push_event(E_EXIT, NULL);
+				return;
 			case SDL_EVENT_KEY_DOWN:
 				switch (e.key.key) {
 					case SDLK_R:
@@ -175,10 +176,32 @@ void host_frame() {
 	host.binds.sprint = kb_state[SDL_SCANCODE_RIGHTBRACKET];
 }
 
-void host_exit(int code) {
-	free(host.buffer_front);
-	free(host.buffer_back);
-	exit(code);
+void host_exit() {
+	if (host.audio_stream) {
+		SDL_DestroyAudioStream(host.audio_stream);
+		host.audio_stream = NULL;
+	}
+	if (host.texture) {
+		SDL_DestroyTexture(host.texture);
+		host.texture = NULL;
+	}
+	if (host.renderer) {
+		SDL_DestroyRenderer(host.renderer);
+		host.renderer = NULL;
+	}
+	if (host.window) {
+		SDL_DestroyWindow(host.window);
+		host.window = NULL;
+	}
+	if (host.buffer_front) {
+		free(host.buffer_front);
+		host.buffer_front = NULL;
+	}
+	if (host.buffer_back) {
+		free(host.buffer_back);
+		host.buffer_back = NULL;
+	}
+	SDL_Quit();
 }
 
 void host_swap_buffer() {

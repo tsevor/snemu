@@ -49,6 +49,9 @@ int main(int argc, char **argv) {
 		EmuCtlEvent e;
 		while (host_get_event(&e)) {
 			switch (e.type) {
+			case E_EXIT:
+				bus_free(&bus);
+				return 0;
 			case E_RESET:
 				bus_reset(&bus);
 				host_send_info(I_INFO, "reset system");

@@ -180,6 +180,7 @@ bool cart_init(Cart *cart, char *filename) {
 	}
 
 	fclose(file);
+	file = NULL;
 
 	// find header
 	int best_score = -1;
@@ -231,10 +232,43 @@ bool cart_init(Cart *cart, char *filename) {
 			break;
 	}
 
+	cart->filename = strdup(filename);
+
 	cart->has_sram = cart->header.sram_size != 0;
 	if (cart->has_sram) {
 		cart->sram_size = (1 << 10) << cart->header.sram_size;
 		cart->sram = malloc(cart->sram_size);
+
+		size_t len = strlen(cart->filename);
+		int dot = len;
+		for (dot = len - 1; dot >= 0; dot--) {
+			if (filename[dot] == '.')
+				break;
+		}
+		if (dot == -1) // not found
+			dot = len; // add to end
+		cart->savefile = malloc(dot + 5);
+		for (int i = 0; i < dot; i++)
+			cart->savefile[i] = cart->filename[i];
+		for (int i = 0; i < 5; i++)
+			cart->savefile[dot + i] = ".srm\0"[i];
+
+		FILE *file = fopen(cart->savefile, "rb");
+		if (file) {
+			linfo("cart: save file found\n");
+			fseek(file, 0, SEEK_END);
+			size_t file_size = ftell(file);
+			if (file_size != cart->sram_size)
+				lerror("cart: save file is wrong size\n");
+			else {
+				fseek(file, 0, SEEK_SET);
+				fread(cart->sram, 1, cart->sram_size, file);
+			}
+		} else {
+			// init sram
+			for (size_t i = 0; i < cart->sram_size; i++)
+				cart->sram = 0;
+		}
 	}
 
 	if (cart->bad_header) lwarn("cart: header likely corrupt\n");
@@ -244,7 +278,28 @@ bool cart_init(Cart *cart, char *filename) {
 	return true;
 }
 
-void cart_free(Cart *cart);
+void cart_free(Cart *cart) {
+	free(cart->rom);
+	if (cart->has_sram) {
+		FILE *file = fopen(cart->savefile, "wb");
+		if (file) {
+			fwrite(cart->sram, 1, cart->sram_size, file);
+			linfo("cart: save file written\n");
+		} else {
+			lerror("cart: save file failed to write\n");
+		}
+		free(cart->sram);
+	}
+}
 
-uint8_t cart_read(Cart *cart);
-void cart_write(Cart *cart);
+uint8_t cart_read(Cart *cart, uint32_t addr) {
+	(void)cart;
+	(void)addr;
+	return 0;
+}
+
+void cart_write(Cart *cart, uint32_t addr, uint8_t val) {
+	(void)cart;
+	(void)addr;
+	(void)val;
+}

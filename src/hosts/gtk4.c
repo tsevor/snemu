@@ -130,8 +130,8 @@ static void on_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height, gp
 static void on_window_close(GtkWindow *win, gpointer data) {
 	(void)win;
 	(void)data;
-
-	host_exit(0);
+	push_event(E_EXIT, NULL);
+	host_exit();
 }
 
 int host_init() {
@@ -182,7 +182,6 @@ void host_frame() {
 void host_exit(int code) {
 	free(host.buffer_front);
 	free(host.buffer_back);
-	exit(code);
 }
 
 void host_swap_buffer() {

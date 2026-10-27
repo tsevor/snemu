@@ -13,9 +13,13 @@ typedef struct Bus {
 	Cart *cart;
 
 	uint8_t open_bus;
+
+	bool vblank_started;
 } Bus;
 
 void bus_init(Bus *bus);
+
+void bus_free(Bus *bus);
 
 void bus_poweron(Bus *bus);
 void bus_reset(Bus *bus);

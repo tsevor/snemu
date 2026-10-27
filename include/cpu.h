@@ -33,6 +33,9 @@ typedef struct CPU {
 	} p;
 
 	uint64_t cycles;
+	uint64_t stall;
+
+	bool stopped;
 
 	Bus *bus;
 

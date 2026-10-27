@@ -21,6 +21,7 @@ typedef enum EmuCtlEventType {
 	E_NONE,
 	E_LOADROM,
 	E_RESET,
+	E_EXIT,
 } EmuCtlEventType;
 
 typedef struct EmuCtlEvent {
@@ -43,8 +44,8 @@ int host_init();
 // called on vblank for host event processing
 void host_frame();
 
-// called on emulator exit
-void host_exit(int code);
+// called on emulator exit to free resources
+void host_exit();
 
 // swap internal buffer with exposed one
 void host_swap_buffer();
