@@ -8,8 +8,8 @@ typedef enum MemLayout {
 	ML_HIROM   = 1,
 	ML_S_DD1   = 2,
 	ML_SA_1    = 3,
-	ML_EXLOROM = 4,
 	ML_EXHIROM = 5,
+	ML_EXLOROM = 6,
 	ML_SPC7110 = 10,
 } MemLayout;
 
@@ -86,16 +86,14 @@ typedef struct RomHeader {
 	uint8_t rom_ver     : 8; // ffdb
 	uint16_t csum_comp  : 16; // ffdc
 	uint16_t csum       : 16; // ffde
-	uint16_t vec_pad    : 16; // ffe0
-	uint16_t vec_pad2   : 16; // ffe2
+	uint32_t vec_pad    : 32; // ffe0
 	uint16_t vec_cop    : 16; // ffe4
 	uint16_t vec_brk    : 16; // ffe6
 	uint16_t vec_abort  : 16; // ffe8
 	uint16_t vec_nmi    : 16; // ffea
-	uint16_t vec_unused : 16; // ffec
+	uint16_t vec_reset  : 16; // ffec
 	uint16_t vec_irq    : 16; // ffee
-	uint16_t vece_pad   : 16; // fff0
-	uint16_t vece_pad2  : 16; // fff2
+	uint32_t vece_pad   : 32; // fff0
 	uint16_t vece_cop   : 16; // ffe4
 	uint16_t vece_none  : 16; // ffe6
 	uint16_t vece_abort : 16; // fff8
@@ -109,8 +107,8 @@ typedef struct Cart {
 
 	char *filename;
 	char *savefile;
-	
-	RomHeader header;
+
+	RomHeader *header;
 	uint32_t header_offset;
 
 	bool bad_header;

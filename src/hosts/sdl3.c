@@ -5,6 +5,7 @@
 #include <SDL3/SDL_scancode.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <SDL3/SDL.h>
 
@@ -124,6 +125,45 @@ int host_init() {
 	return 0;
 }
 
+static void capture_screenshot(void) {
+	SDL_Surface *surface = SDL_CreateSurfaceFrom(
+		SNES_WIDTH,
+		SNES_HEIGHT,
+		SDL_PIXELFORMAT_ARGB8888,
+		host.buffer_front,
+		SNES_WIDTH * sizeof(uint32_t)
+	);
+	if (!surface) {
+		lerror("screenshot: failed to create surface: %s\n", SDL_GetError());
+		return;
+	}
+
+	char filename[64];
+	time_t t = time(NULL);
+	struct tm *tm = localtime(&t);
+	char base[48];
+	if (tm) {
+		strftime(base, sizeof(base), "screenshot-%Y%m%d-%H%M%S", tm);
+	} else {
+		snprintf(base, sizeof(base), "screenshot");
+	}
+	snprintf(filename, sizeof(filename), "%s.png", base);
+	int index = 1;
+	FILE *f;
+	while ((f = fopen(filename, "r")) != NULL) {
+		fclose(f);
+		snprintf(filename, sizeof(filename), "%s-%d.png", base, index++);
+	}
+
+	if (SDL_SavePNG(surface, filename)) {
+		lhost("screenshot: saved to %s\n", filename);
+	} else {
+		lerror("screenshot: failed to save %s: %s\n", filename, SDL_GetError());
+	}
+
+	SDL_DestroySurface(surface);
+}
+
 void host_frame() {
 
 	SDL_UpdateTexture(host.texture, NULL, host.buffer_front, SNES_WIDTH * sizeof(uint32_t));
@@ -147,10 +187,14 @@ void host_frame() {
 				push_event(E_EXIT, NULL);
 				return;
 			case SDL_EVENT_KEY_DOWN:
+				if (e.key.repeat) continue;
 				switch (e.key.key) {
 					case SDLK_R:
 						push_event(E_RESET, NULL);
 						SDL_ClearAudioStream(host.audio_stream);
+						break;
+					case SDLK_P:
+						capture_screenshot();
 						break;
 					default:
 						break;
@@ -163,14 +207,14 @@ void host_frame() {
 	const bool* kb_state = SDL_GetKeyboardState(NULL);
 
 	host.controller = (
-		  (kb_state[SDL_SCANCODE_S]     ? BUTTON_A : 0)
-		| (kb_state[SDL_SCANCODE_A]     ? BUTTON_B : 0)
+		  (kb_state[SDL_SCANCODE_S]     ? BUTTON_A      : 0)
+		| (kb_state[SDL_SCANCODE_A]     ? BUTTON_B      : 0)
 		| (kb_state[SDL_SCANCODE_Q]     ? BUTTON_SELECT : 0)
-		| (kb_state[SDL_SCANCODE_W]     ? BUTTON_START : 0)
-		| (kb_state[SDL_SCANCODE_UP]    ? BUTTON_UP : 0)
-		| (kb_state[SDL_SCANCODE_DOWN]  ? BUTTON_DOWN : 0)
-		| (kb_state[SDL_SCANCODE_LEFT]  ? BUTTON_LEFT : 0)
-		| (kb_state[SDL_SCANCODE_RIGHT] ? BUTTON_RIGHT : 0)
+		| (kb_state[SDL_SCANCODE_W]     ? BUTTON_START  : 0)
+		| (kb_state[SDL_SCANCODE_UP]    ? BUTTON_UP     : 0)
+		| (kb_state[SDL_SCANCODE_DOWN]  ? BUTTON_DOWN   : 0)
+		| (kb_state[SDL_SCANCODE_LEFT]  ? BUTTON_LEFT   : 0)
+		| (kb_state[SDL_SCANCODE_RIGHT] ? BUTTON_RIGHT  : 0)
 	);
 
 	host.binds.sprint = kb_state[SDL_SCANCODE_RIGHTBRACKET];
@@ -209,6 +253,10 @@ void host_swap_buffer() {
 	host.buffer_back = host.buffer_front;
 	host.buffer_front = temp;
 	host_screen_buffer = host.buffer_back;
+}
+
+void host_copy_buffer() {
+	mempcpy(host.buffer_front, host.buffer_back, SNES_WIDTH * SNES_HEIGHT * sizeof(uint32_t));
 }
 
 void host_queue_audio_buffer(int16_t *buffer, size_t len) {

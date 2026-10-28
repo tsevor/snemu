@@ -179,10 +179,19 @@ void cpu_reset(CPU *cpu) {
 	cpu->e = true;
 	cpu->s = 0xfd;
 	cpu->pc = cpu_read16(cpu, 0xfffc, RW_PROG);
-	cpu->cycles = 0;
+	cpu->cycles = 7;
 }
 
 void cpu_step(CPU *cpu) {
+	for (int i = 0; i < 0x40000; i++) {
+		bus_read(cpu->bus, cpu->cycles);
+		cpu->cycles = (cpu->cycles + 1) & 0xffffff;
+	}
+	bus_clock(cpu->bus);
+	host_copy_buffer();
+
+	return;
+
 	if (cpu->stopped) {
 		return;
 	}

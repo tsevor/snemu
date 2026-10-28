@@ -50,6 +50,9 @@ void host_exit();
 // swap internal buffer with exposed one
 void host_swap_buffer();
 
+// copy exposed buffer to internal one
+void host_copy_buffer();
+
 // queue 'len' samples of audio to play
 void host_queue_audio_buffer(int16_t *buffer, size_t len);
 

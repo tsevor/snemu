@@ -191,6 +191,10 @@ void host_swap_buffer() {
 	host_screen_buffer = host.buffer_back;
 }
 
+void host_copy_buffer() {
+	mempcpy(host.buffer_front, host.buffer_back, SNES_WIDTH * SNES_HEIGHT * sizeof(uint32_t));
+}
+
 void host_queue_audio_buffer(int16_t *buffer, size_t len) {
 	(void)buffer;
 	(void)len;
