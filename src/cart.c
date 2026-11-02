@@ -260,8 +260,8 @@ bool cart_init(Cart *cart, char *filename) {
 
 void cart_free(Cart *cart) {
 	free(cart->rom);
-#ifndef _DONT_SAVE_SRAM_FILE // less clutter during development
 	if (cart->has_sram) {
+#ifndef _DONT_SAVE_SRAM_FILE // less clutter during development
 		FILE *file = fopen(cart->savefile, "wb");
 		if (file) {
 			fwrite(cart->sram, 1, cart->sram_size, file);
@@ -270,9 +270,9 @@ void cart_free(Cart *cart) {
 		} else {
 			lerror("cart: save file failed to write\n");
 		}
+#endif
 		free(cart->sram);
 	}
-#endif
 }
 
 uint8_t cart_read(Cart *cart, uint32_t addr) {
@@ -285,7 +285,7 @@ uint8_t cart_read(Cart *cart, uint32_t addr) {
 	uint8_t p;
 	switch (cart->layout) {
 		case ML_LOROM:
-			if (addr & 0x8000) { // rom
+			if (addr & 0x008000) { // rom
 				a = (((addr & 0x7f0000) >> 1) | (addr & 0x7fff)) & (cart->rom_size - 1);
 				p = a * 255 / cart->rom_size;
 				host_screen_buffer[idx] = 0xffff0000 | (p << 8);

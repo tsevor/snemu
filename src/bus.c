@@ -21,9 +21,16 @@ void bus_reset(Bus *bus) {
 	cpu_reset(bus->cpu);
 }
 
+void bus_next_fast(Bus *bus, bool fast) {
+	bus->cart->last_read_fast = fast;
+}
+
 void bus_clock(Bus *bus) {
 	// clock components
 	bus->vblank_started = true; // force vblank for now
+	int cycles = bus->cart->last_read_fast ? 6 : 8;
+
+	(void)cycles;
 }
 
 uint8_t bus_read(Bus *bus, uint32_t addr) {
@@ -39,9 +46,9 @@ uint8_t bus_read(Bus *bus, uint32_t addr) {
 	uint16_t idx = y * width + x;
 	uint32_t a;
 	uint8_t p;
-	if (!(addr & 0x408000)) { // bottom half q1/q3
+	if ((addr & 0x408000) == 0x000000) { // bottom half q1/q3
 		switch (addr & 0xffff) { // aux
-			case 0x0000 ... 0x1fff:
+			case 0x0000 ... 0x1fff: // wram mirror
 				a = addr & 0xffff;
 				p = a * 255 / 0x20000;
 				host_screen_buffer[idx] = 0xff0000ff | (p << 16);
@@ -52,7 +59,7 @@ uint8_t bus_read(Bus *bus, uint32_t addr) {
 				bus->open_bus = cart_read(bus->cart, addr);
 				break;
 		}
-	} else if (addr >= 0x7e0000 && addr < 0x800000) { // wram
+	} else if ((addr & 0xfe0000) == 0x7e0000) { // wram
 		a = addr & 0x1ffff;
 		p = a * 255 / 0x20000;
 		host_screen_buffer[idx] = 0xff0000ff | (p << 16);

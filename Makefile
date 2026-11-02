@@ -15,6 +15,12 @@ else ifeq ($(HOST), sdl3)
 	HOST_SRC = src/hosts/sdl3.c
 	HOST_CFLAGS += $(shell pkg-config --cflags sdl3)
 	LDFLAGS += $(shell pkg-config --libs sdl3)
+else ifeq ($(HOST), sdl3-win)
+	HOST_SRC = src/hosts/sdl3.c
+	CC = x86_64-w64-mingw32-gcc
+	HOST_CFLAGS += $(shell x86_64-w64-mingw32-pkg-config --cflags sdl3)
+	LDFLAGS += $(shell x86_64-w64-mingw32-pkg-config --static --libs sdl3) -static
+	TARGET := $(TARGET).exe
 else
 	$(error unknown HOST '$(HOST)')
 endif

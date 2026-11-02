@@ -6,12 +6,39 @@
 #include "bus.h"
 
 typedef struct CPU {
-	uint16_t a;
-	uint16_t x;
-	uint16_t y;
+	union {
+		uint16_t a;
+		struct {
+			uint8_t al;
+			uint8_t ah;
+		};
+	};
+	union {
+		uint16_t x;
+		struct {
+			uint8_t xl;
+			uint8_t xh;
+		};
+	};
+	union {
+		uint16_t y;
+		struct {
+			uint8_t yl;
+			uint8_t yh;
+		};
+	};
 
 	uint16_t pc;
-	uint16_t s;
+
+	union {
+		uint16_t s;
+		struct {
+			uint8_t sl;
+			uint8_t sh;
+		};
+	};
+
+	uint16_t d;
 
 	uint8_t db;
 	uint8_t pb;
