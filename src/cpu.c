@@ -1,8 +1,16 @@
 #include "cpu.h"
 
 #include "bus.h"
-#include "host.h"
 #include "log.h"
+
+typedef enum InterruptType {
+	INT_COP,
+	INT_BRK,
+	INT_ABORT,
+	INT_NMI,
+	INT_IRQ,
+	INT_RESET,
+} InterruptType;
 
 typedef enum AddrMode {
 	Imp,
@@ -33,7 +41,7 @@ typedef enum AddrMode {
 	BlkMov,
 } AddrMode;
 
-void cpu_internal_op(CPU *cpu) {
+void cpu_internal_tick(CPU *cpu) {
 	cpu->cycles++;
 	bus_next_fast(cpu->bus, true);
 	bus_clock(cpu->bus);
@@ -53,19 +61,27 @@ void cpu_write(CPU *cpu, uint32_t addr, uint8_t val) {
 }
 
 uint16_t cpu_read16(CPU *cpu, uint32_t addr) {
-	return cpu_read(cpu, addr)
-		| (cpu_read(cpu, addr + 1) << 8);
+	uint32_t bank = addr & 0xff0000;
+	uint16_t bank_addr = addr;
+	uint16_t val = cpu_read(cpu, addr);
+	val |= (cpu_read(cpu, bank | ((bank_addr + 1) & 0xffff)) << 8);
+	return val;
 }
 
 void cpu_write16(CPU *cpu, uint32_t addr, uint16_t val) {
+	uint32_t bank = addr & 0xff0000;
+	uint16_t bank_addr = addr;
 	cpu_write(cpu, addr, val & 0xff);
-	cpu_write(cpu, addr + 1, val >> 8);
+	cpu_write(cpu, bank | ((bank_addr + 1) & 0xffff), val >> 8);
 }
 
-uint16_t cpu_read24(CPU *cpu, uint32_t addr) {
-	return cpu_read(cpu, addr)
-	| (cpu_read(cpu, addr + 1) << 8)
-	| (cpu_read(cpu, addr + 2) << 16);
+uint32_t cpu_read24(CPU *cpu, uint32_t addr) {
+	uint32_t bank = addr & 0xff0000;
+	uint16_t bank_addr = addr;
+	uint32_t val = cpu_read(cpu, addr);
+	val |= (cpu_read(cpu, bank | ((bank_addr + 1) & 0xffff)) << 8);
+	val |= (cpu_read(cpu, bank | ((bank_addr + 2) & 0xffff)) << 16);
+	return val;
 }
 
 uint8_t cpu_pull(CPU *cpu) {
@@ -88,13 +104,14 @@ void cpu_push(CPU *cpu, uint8_t val) {
 
 void cpu_push16(CPU *cpu, uint16_t val) {
 	cpu_push(cpu, val >> 8);
-	cpu_push(cpu, val & 0xff);
+	cpu_push(cpu, val);
 }
 
 uint16_t cpu_pull16(CPU *cpu) {
-	return cpu_pull(cpu) | cpu_pull(cpu) << 8;
+	uint16_t val = cpu_pull(cpu);
+	val |= cpu_pull(cpu) << 8;
+	return val;
 }
-
 
 void cpu_set_zn8(CPU *cpu, uint8_t val) {
 	cpu->p.z = (val == 0);
@@ -105,9 +122,6 @@ void cpu_set_zn16(CPU *cpu, uint16_t val) {
 	cpu->p.z = (val == 0);
 	cpu->p.n = (val & 0x8000) != 0;
 }
-
-
-
 
 uint32_t cpu_oper_addr(CPU *cpu, AddrMode mode) {
 	uint16_t addr16;
@@ -216,43 +230,408 @@ uint32_t cpu_oper_addr(CPU *cpu, AddrMode mode) {
 	}
 }
 
+void cpu_branch(CPU *cpu, AddrMode mode, bool condition) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (condition) {
+		cpu_internal_tick(cpu);
+		if (cpu->e && ((cpu->pc & 0xff00) != (addr & 0xff00))) {
+			// emulation mode page cross
+			cpu_internal_tick(cpu);
+		}
+		cpu->pc = addr;
+	}
+}
 
-void cpu_op_adc(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("adc\n");}
-void cpu_op_and(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("and\n");}
-void cpu_op_asl(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("asl\n");}
-void cpu_op_bcc(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("bcc\n");}
-void cpu_op_bcs(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("bcs\n");}
-void cpu_op_beq(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("beq\n");}
-void cpu_op_bit(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("bit\n");}
-void cpu_op_bmi(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("bmi\n");}
-void cpu_op_bne(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("bne\n");}
-void cpu_op_bpl(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("bpl\n");}
-void cpu_op_bra(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("bra\n");}
-void cpu_op_brk(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("brk\n");}
-void cpu_op_brl(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("brl\n");}
-void cpu_op_bvc(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("bvc\n");}
-void cpu_op_bvs(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("bvs\n");}
+void cpu_interrupt(CPU *cpu, InterruptType type) {
+	uint16_t vector = 0;
+
+	cpu->waiting = false;
+
+	if (cpu->e) {
+		switch (type) {
+			case INT_COP:   vector = 0xfff4; break;
+			case INT_ABORT: vector = 0xfff8; break;
+			case INT_NMI:   vector = 0xfffa; break;
+			case INT_RESET: vector = 0xfffc; break;
+			case INT_BRK:
+			case INT_IRQ:   vector = 0xfffe; break;
+		}
+	} else {
+		switch (type) {
+			case INT_COP:   vector = 0xffe4; break;
+			case INT_BRK:   vector = 0xffe6; break;
+			case INT_ABORT: vector = 0xffe8; break;
+			case INT_NMI:   vector = 0xffea; break;
+			case INT_RESET: vector = 0xffec; break;
+			case INT_IRQ:   vector = 0xffee; break;
+		}
+	}
+
+	uint8_t p = cpu->p.raw;
+
+	if (cpu->e) {
+		if (type == INT_BRK) {
+			p |= 0x10;
+		} else {
+			p &= ~0x10;
+		}
+	}
+
+	if (type != INT_RESET) {
+		if (!cpu->e) {
+			cpu_push(cpu, cpu->pb);
+		}
+		cpu_push16(cpu, cpu->pc);
+		cpu_push(cpu, p);
+	}
+
+	cpu->p.i = 1;
+	if (!cpu->e) {
+		cpu->p.d = 0;
+	}
+
+	cpu->pb = 0x00;
+	cpu->pc = cpu_read16(cpu, vector);
+}
+
+void cpu_op_adc(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (cpu->p.m) {
+		uint8_t val = cpu_read(cpu, addr);
+		if (cpu->p.d) {
+			uint16_t l = (cpu->al & 0x0f) + (val & 0x0f) + cpu->p.c;
+			uint16_t h = (cpu->al & 0xf0) + (val & 0xf0) + (l > 0x09 ? 0x10 : 0);
+			cpu->p.z = ((cpu->al + val + cpu->p.c) & 0xff) == 0;
+			cpu->p.v = (~(cpu->al ^ val) & (cpu->al ^ h) & 0x80) != 0;
+			if (l > 0x09) h += 0x06;
+			cpu->p.n = (h & 0x80) != 0;
+			cpu->p.c = (h > 0x9f);
+			if (cpu->p.c) h += 0x60;
+			cpu->al = h & 0xff;
+		} else {
+			uint16_t res = cpu->al + val + cpu->p.c;
+			cpu->p.v = (~(cpu->al ^ val) & (cpu->al ^ res) & 0x80) != 0;
+			cpu->p.c = res > 0xff;
+			cpu->al = res & 0xff;
+			cpu_set_zn8(cpu, cpu->al);
+		}
+	} else {
+		uint16_t val = cpu_read16(cpu, addr);
+		if (cpu->p.d) {
+			uint16_t n0 = (cpu->a & 0x000f) + (val & 0x000f) + cpu->p.c;
+			uint16_t n1 = (cpu->a & 0x00f0) + (val & 0x00f0) + (n0 > 0x0009 ? 0x0010 : 0);
+			uint16_t n2 = (cpu->a & 0x0f00) + (val & 0x0f00) + (n1 > 0x009f ? 0x0100 : 0);
+			uint32_t n3 = (cpu->a & 0xf000) + (val & 0xf000) + (n2 > 0x09ff ? 0x1000 : 0);
+			cpu->p.z = ((cpu->a + val + cpu->p.c) & 0xffff) == 0;
+			cpu->p.v = (~(cpu->a ^ val) & (cpu->a ^ n3) & 0x8000) != 0;
+			if (n0 > 0x0009) n1 += 0x0006;
+			if (n1 > 0x009f) n2 += 0x0060;
+			if (n2 > 0x09ff) n3 += 0x0600;
+			cpu->p.n = (n3 & 0x8000) != 0;
+			cpu->p.c = (n3 > 0x9fff);
+			if (cpu->p.c) n3 += 0x6000;
+			cpu->a = (n3 & 0xf000) | (n2 & 0x0f00) | (n1 & 0x00f0) | (n0 & 0x000f);
+		} else {
+			uint32_t res = cpu->a + val + cpu->p.c;
+			cpu->p.v = (~(cpu->a ^ val) & (cpu->a ^ res) & 0x8000) != 0;
+			cpu->p.c = res > 0xffff;
+			cpu->a = res & 0xffff;
+			cpu_set_zn16(cpu, cpu->a);
+		}
+	}
+}
+
+void cpu_op_and(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (cpu->p.m) {
+		cpu->al &= cpu_read(cpu, addr);
+		cpu_set_zn8(cpu, cpu->al);
+	} else {
+		cpu->a &= cpu_read16(cpu, addr);
+		cpu_set_zn16(cpu, cpu->a);
+	}
+}
+
+void cpu_op_asl(CPU *cpu, AddrMode mode) {
+	if (mode == ImpAcc) {
+		if (cpu->p.m) {
+			cpu->p.c = (cpu->al & 0x80) != 0;
+			cpu->al <<= 1;
+			cpu_set_zn8(cpu, cpu->al);
+		} else {
+			cpu->p.c = (cpu->a & 0x8000) != 0;
+			cpu->a <<= 1;
+			cpu_set_zn16(cpu, cpu->a);
+		}
+		cpu_internal_tick(cpu);
+	} else {
+		uint32_t addr = cpu_oper_addr(cpu, mode);
+		if (cpu->p.m) {
+			uint8_t val = cpu_read(cpu, addr);
+			cpu_internal_tick(cpu);
+			cpu->p.c = (val & 0x80) != 0;
+			val <<= 1;
+			cpu_write(cpu, addr, val);
+			cpu_set_zn8(cpu, val);
+		} else {
+			uint16_t val = cpu_read16(cpu, addr);
+			cpu_internal_tick(cpu);
+			cpu->p.c = (val & 0x8000) != 0;
+			val <<= 1;
+			cpu_write16(cpu, addr, val);
+			cpu_set_zn16(cpu, val);
+		}
+	}
+}
+
+void cpu_op_bcc(CPU *cpu, AddrMode mode) {
+	cpu_branch(cpu, mode, !cpu->p.c);
+}
+
+void cpu_op_bcs(CPU *cpu, AddrMode mode) {
+	cpu_branch(cpu, mode, cpu->p.c);
+}
+
+void cpu_op_beq(CPU *cpu, AddrMode mode) {
+	cpu_branch(cpu, mode, cpu->p.z);
+}
+
+void cpu_op_bit(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (cpu->p.m) {
+		uint8_t val = cpu_read(cpu, addr);
+		cpu->p.z = ((cpu->al & val) == 0);
+		if (mode != ImmM) {
+			cpu->p.n = (val & 0x80) != 0;
+			cpu->p.v = (val & 0x40) != 0;
+		}
+	} else {
+		uint16_t val = cpu_read16(cpu, addr);
+		cpu->p.z = ((cpu->a & val) == 0);
+		if (mode != ImmM) {
+			cpu->p.n = (val & 0x8000) != 0;
+			cpu->p.v = (val & 0x4000) != 0;
+		}
+	}
+}
+
+void cpu_op_bmi(CPU *cpu, AddrMode mode) {
+	cpu_branch(cpu, mode, cpu->p.n);
+}
+
+void cpu_op_bne(CPU *cpu, AddrMode mode) {
+	cpu_branch(cpu, mode, !cpu->p.z);
+}
+
+void cpu_op_bpl(CPU *cpu, AddrMode mode) {
+	cpu_branch(cpu, mode, !cpu->p.n);
+}
+
+void cpu_op_bra(CPU *cpu, AddrMode mode) {
+	cpu_branch(cpu, mode, true);
+}
+
+void cpu_op_brk(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_read(cpu, cpu->pb << 16 | cpu->pc++);
+	cpu_interrupt(cpu, INT_BRK);
+}
+
+void cpu_op_brl(CPU *cpu, AddrMode mode) {
+	cpu_branch(cpu, mode, true);
+}
+
+void cpu_op_bvc(CPU *cpu, AddrMode mode) {
+	cpu_branch(cpu, mode, !cpu->p.v);
+}
+
+void cpu_op_bvs(CPU *cpu, AddrMode mode) {
+	cpu_branch(cpu, mode, cpu->p.v);
+}
 
 void cpu_op_clc(CPU *cpu, AddrMode mode) {
 	(void)mode;
 	cpu->p.c = 0;
-	cpu_internal_op(cpu);
+	cpu_internal_tick(cpu);
 }
 
-void cpu_op_cld(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("cld\n");}
-void cpu_op_cli(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("cli\n");}
-void cpu_op_clv(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("clv\n");}
-void cpu_op_cmp(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("cmp\n");}
-void cpu_op_cop(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("cop\n");}
-void cpu_op_cpx(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("cpx\n");}
-void cpu_op_cpy(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("cpy\n");}
-void cpu_op_dec(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("dec\n");}
-void cpu_op_dex(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("dex\n");}
-void cpu_op_dey(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("dey\n");}
-void cpu_op_eor(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("eor\n");}
-void cpu_op_inc(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("inc\n");}
-void cpu_op_inx(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("inx\n");}
-void cpu_op_iny(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("iny\n");}
+void cpu_op_cld(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu->p.d = 0;
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_cli(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu->p.i = 0;
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_clv(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu->p.v = 0;
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_cmp(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (cpu->p.m) {
+		uint8_t val = cpu_read(cpu, addr);
+		cpu->p.c = (cpu->al >= val);
+		cpu_set_zn8(cpu, cpu->al - val);
+	} else {
+		uint16_t val = cpu_read16(cpu, addr);
+		cpu->p.c = (cpu->a >= val);
+		cpu_set_zn16(cpu, cpu->a - val);
+	}
+}
+
+void cpu_op_cop(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_read(cpu, cpu->pb << 16 | cpu->pc++);
+	cpu_interrupt(cpu, INT_COP);
+}
+
+void cpu_op_cpx(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (cpu->p.x) {
+		uint8_t val = cpu_read(cpu, addr);
+		cpu->p.c = (cpu->xl >= val);
+		cpu_set_zn8(cpu, cpu->xl - val);
+	} else {
+		uint16_t val = cpu_read16(cpu, addr);
+		cpu->p.c = (cpu->x >= val);
+		cpu_set_zn16(cpu, cpu->x - val);
+	}
+}
+
+void cpu_op_cpy(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (cpu->p.x) {
+		uint8_t val = cpu_read(cpu, addr);
+		cpu->p.c = (cpu->yl >= val);
+		cpu_set_zn8(cpu, cpu->yl - val);
+	} else {
+		uint16_t val = cpu_read16(cpu, addr);
+		cpu->p.c = (cpu->y >= val);
+		cpu_set_zn16(cpu, cpu->y - val);
+	}
+}
+
+void cpu_op_dec(CPU *cpu, AddrMode mode) {
+	if (mode == ImpAcc) {
+		if (cpu->p.m) {
+			cpu->al--;
+			cpu_set_zn8(cpu, cpu->al);
+		} else {
+			cpu->a--;
+			cpu_set_zn16(cpu, cpu->a);
+		}
+		cpu_internal_tick(cpu);
+	} else {
+		uint32_t addr = cpu_oper_addr(cpu, mode);
+		if (cpu->p.m) {
+			uint8_t val = cpu_read(cpu, addr);
+			cpu_internal_tick(cpu);
+			val--;
+			cpu_write(cpu, addr, val);
+			cpu_set_zn8(cpu, val);
+		} else {
+			uint16_t val = cpu_read16(cpu, addr);
+			cpu_internal_tick(cpu);
+			val--;
+			cpu_write16(cpu, addr, val);
+			cpu_set_zn16(cpu, val);
+		}
+	}
+}
+
+void cpu_op_dex(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	if (cpu->p.x) {
+		cpu->xl--;
+		cpu_set_zn8(cpu, cpu->xl);
+	} else {
+		cpu->x--;
+		cpu_set_zn16(cpu, cpu->x);
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_dey(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	if (cpu->p.x) {
+		cpu->yl--;
+		cpu_set_zn8(cpu, cpu->yl);
+	} else {
+		cpu->y--;
+		cpu_set_zn16(cpu, cpu->y);
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_eor(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (cpu->p.m) {
+		cpu->al ^= cpu_read(cpu, addr);
+		cpu_set_zn8(cpu, cpu->al);
+	} else {
+		cpu->a ^= cpu_read16(cpu, addr);
+		cpu_set_zn16(cpu, cpu->a);
+	}
+}
+
+void cpu_op_inc(CPU *cpu, AddrMode mode) {
+	if (mode == ImpAcc) {
+		if (cpu->p.m) {
+			cpu->al++;
+			cpu_set_zn8(cpu, cpu->al);
+		} else {
+			cpu->a++;
+			cpu_set_zn16(cpu, cpu->a);
+		}
+		cpu_internal_tick(cpu);
+	} else {
+		uint32_t addr = cpu_oper_addr(cpu, mode);
+		if (cpu->p.m) {
+			uint8_t val = cpu_read(cpu, addr);
+			cpu_internal_tick(cpu);
+			val++;
+			cpu_write(cpu, addr, val);
+			cpu_set_zn8(cpu, val);
+		} else {
+			uint16_t val = cpu_read16(cpu, addr);
+			cpu_internal_tick(cpu);
+			val++;
+			cpu_write16(cpu, addr, val);
+			cpu_set_zn16(cpu, val);
+		}
+	}
+}
+
+void cpu_op_inx(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	if (cpu->p.x) {
+		cpu->xl++;
+		cpu_set_zn8(cpu, cpu->xl);
+	} else {
+		cpu->x++;
+		cpu_set_zn16(cpu, cpu->x);
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_iny(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	if (cpu->p.x) {
+		cpu->yl++;
+		cpu_set_zn8(cpu, cpu->yl);
+	} else {
+		cpu->y++;
+		cpu_set_zn16(cpu, cpu->y);
+	}
+	cpu_internal_tick(cpu);
+}
 
 void cpu_op_jmp(CPU *cpu, AddrMode mode) {
 	uint32_t addr = cpu_oper_addr(cpu, mode);
@@ -262,11 +641,25 @@ void cpu_op_jmp(CPU *cpu, AddrMode mode) {
 	}
 }
 
-void cpu_op_jsr(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("jsr\n");}
+void cpu_op_jsr(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	uint16_t ret_addr = cpu->pc - 1;
+
+	cpu_internal_tick(cpu);
+
+	if (mode == AbsL) {
+		cpu_push(cpu, cpu->pb);
+		cpu_push16(cpu, ret_addr);
+		cpu->pb = addr >> 16;
+		cpu->pc = addr;
+	} else {
+		cpu_push16(cpu, ret_addr);
+		cpu->pc = addr;
+	}
+}
 
 void cpu_op_lda(CPU *cpu, AddrMode mode) {
 	uint32_t addr = cpu_oper_addr(cpu, mode);
-
 	if (cpu->p.m) {
 		cpu->al = cpu_read(cpu, addr);
 		cpu_set_zn8(cpu, cpu->al);
@@ -278,7 +671,6 @@ void cpu_op_lda(CPU *cpu, AddrMode mode) {
 
 void cpu_op_ldx(CPU *cpu, AddrMode mode) {
 	uint32_t addr = cpu_oper_addr(cpu, mode);
-
 	if (cpu->p.x) {
 		cpu->xl = cpu_read(cpu, addr);
 		cpu_set_zn8(cpu, cpu->xl);
@@ -290,7 +682,6 @@ void cpu_op_ldx(CPU *cpu, AddrMode mode) {
 
 void cpu_op_ldy(CPU *cpu, AddrMode mode) {
 	uint32_t addr = cpu_oper_addr(cpu, mode);
-
 	if (cpu->p.x) {
 		cpu->yl = cpu_read(cpu, addr);
 		cpu_set_zn8(cpu, cpu->yl);
@@ -300,72 +691,418 @@ void cpu_op_ldy(CPU *cpu, AddrMode mode) {
 	}
 }
 
-void cpu_op_lsr(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("lsr\n");}
-void cpu_op_mvn(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("mvn\n");}
-void cpu_op_mvp(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("mvp\n");}
-void cpu_op_nop(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("nop\n");}
-void cpu_op_ora(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("ora\n");}
-void cpu_op_pea(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("pea\n");}
-void cpu_op_pei(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("pei\n");}
-void cpu_op_per(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("per\n");}
-void cpu_op_pha(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("pha\n");}
-void cpu_op_phb(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("phb\n");}
-void cpu_op_phd(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("phd\n");}
-void cpu_op_phk(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("phk\n");}
+void cpu_op_lsr(CPU *cpu, AddrMode mode) {
+	if (mode == ImpAcc) {
+		if (cpu->p.m) {
+			cpu->p.c = cpu->al & 0x01;
+			cpu->al >>= 1;
+			cpu_set_zn8(cpu, cpu->al);
+		} else {
+			cpu->p.c = cpu->a & 0x01;
+			cpu->a >>= 1;
+			cpu_set_zn16(cpu, cpu->a);
+		}
+		cpu_internal_tick(cpu);
+	} else {
+		uint32_t addr = cpu_oper_addr(cpu, mode);
+		if (cpu->p.m) {
+			uint8_t val = cpu_read(cpu, addr);
+			cpu_internal_tick(cpu);
+			cpu->p.c = val & 0x01;
+			val >>= 1;
+			cpu_write(cpu, addr, val);
+			cpu_set_zn8(cpu, val);
+		} else {
+			uint16_t val = cpu_read16(cpu, addr);
+			cpu_internal_tick(cpu);
+			cpu->p.c = val & 0x01;
+			val >>= 1;
+			cpu_write16(cpu, addr, val);
+			cpu_set_zn16(cpu, val);
+		}
+	}
+}
+
+void cpu_op_mvn(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	uint8_t src_bank = addr >> 8;
+	uint8_t dst_bank = addr;
+	cpu->db = dst_bank;
+	uint8_t val = cpu_read(cpu, (src_bank << 16) | cpu->x);
+	cpu_write(cpu, (dst_bank << 16) | cpu->y, val);
+	cpu->x++;
+	cpu->y++;
+	cpu->a--;
+	if (cpu->a != 0xffff) cpu->pc -= 3;
+}
+
+void cpu_op_mvp(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	uint8_t src_bank = addr >> 8;
+	uint8_t dst_bank = addr;
+	cpu->db = dst_bank;
+	uint8_t val = cpu_read(cpu, (src_bank << 16) | cpu->x);
+	cpu_write(cpu, (dst_bank << 16) | cpu->y, val);
+	cpu->x--;
+	cpu->y--;
+	cpu->a--;
+	if (cpu->a != 0xffff) cpu->pc -= 3;
+}
+
+void cpu_op_nop(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_ora(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (cpu->p.m) {
+		cpu->al |= cpu_read(cpu, addr);
+		cpu_set_zn8(cpu, cpu->al);
+	} else {
+		cpu->a |= cpu_read16(cpu, addr);
+		cpu_set_zn16(cpu, cpu->a);
+	}
+}
+
+void cpu_op_pea(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	cpu_push16(cpu, addr);
+}
+
+void cpu_op_pei(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	cpu_push16(cpu, addr);
+}
+
+void cpu_op_per(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	cpu_push16(cpu, addr & 0xffff);
+}
+
+void cpu_op_pha(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+	if (cpu->p.m) {
+		cpu_push(cpu, cpu->al);
+	} else {
+		cpu_push16(cpu, cpu->a);
+	}
+}
+
+void cpu_op_phb(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_push(cpu, cpu->db);
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_phd(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_push16(cpu, cpu->d);
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_phk(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_push(cpu, cpu->pb);
+	cpu_internal_tick(cpu);
+}
 
 void cpu_op_php(CPU *cpu, AddrMode mode) {
 	(void)mode;
 	cpu_push(cpu, cpu->p.raw);
-	cpu_internal_op(cpu);
+	cpu_internal_tick(cpu);
 }
 
-void cpu_op_phx(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("phx\n");}
-void cpu_op_phy(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("phy\n");}
-void cpu_op_pla(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("pla\n");}
-void cpu_op_plb(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("plb\n");}
-void cpu_op_pld(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("pld\n");}
-void cpu_op_plp(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("plp\n");}
-void cpu_op_plx(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("plx\n");}
-void cpu_op_ply(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("ply\n");}
+void cpu_op_phx(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+	if (cpu->p.x) {
+		cpu_push(cpu, cpu->xl);
+	} else {
+		cpu_push16(cpu, cpu->x);
+	}
+}
 
-void cpu_op_rep(CPU *cpu, AddrMode mode) {
-	uint32_t addr = cpu_oper_addr(cpu, mode);
-	uint8_t val = cpu_read(cpu, addr);
+void cpu_op_phy(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+	if (cpu->p.x) {
+		cpu_push(cpu, cpu->yl);
+	} else {
+		cpu_push16(cpu, cpu->y);
+	}
+}
 
-	cpu->p.raw &= ~val;
+void cpu_op_pla(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+	if (cpu->p.m) {
+		cpu->al = cpu_pull(cpu);
+		cpu_set_zn8(cpu, cpu->al);
+	} else {
+		cpu->a = cpu_pull16(cpu);
+		cpu_set_zn16(cpu, cpu->a);
+	}
+	cpu_internal_tick(cpu);
+}
 
+void cpu_op_plb(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+	cpu->db = cpu_pull(cpu);
+	cpu_set_zn8(cpu, cpu->db);
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_pld(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+	cpu->d = cpu_pull16(cpu);
+	cpu_set_zn16(cpu, cpu->d);
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_plp(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+	uint8_t val = cpu_pull(cpu);
+	bool was_16bit_x = (cpu->p.x == 0);
+	cpu->p.raw = val;
 	if (cpu->e) {
 		cpu->p.m = 1;
 		cpu->p.x = 1;
 	}
-
-	cpu_internal_op(cpu);
-}
-
-void cpu_op_rol(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("rol\n");}
-void cpu_op_ror(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("ror\n");}
-void cpu_op_rti(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("rti\n");}
-void cpu_op_rtl(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("rtl\n");}
-void cpu_op_rts(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("rts\n");}
-void cpu_op_sbc(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("sbc\n");}
-void cpu_op_sec(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("sec\n");}
-void cpu_op_sed(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("sed\n");}
-void cpu_op_sei(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("sei\n");}
-
-void cpu_op_sep(CPU *cpu, AddrMode mode) {
-	uint32_t addr = cpu_oper_addr(cpu, mode);
-	uint8_t val = cpu_read(cpu, addr);
-
-	bool was_16bit_x = (cpu->p.x == 0);
-
-	cpu->p.raw |= val;
-
 	if (was_16bit_x && cpu->p.x) {
 		cpu->xh = 0x00;
 		cpu->yh = 0x00;
 	}
+}
 
-	cpu_internal_op(cpu);
+void cpu_op_plx(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+	if (cpu->p.x) {
+		cpu->xl = cpu_pull(cpu);
+		cpu_set_zn8(cpu, cpu->xl);
+	} else {
+		cpu->x = cpu_pull16(cpu);
+		cpu_set_zn16(cpu, cpu->x);
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_ply(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+	if (cpu->p.x) {
+		cpu->yl = cpu_pull(cpu);
+		cpu_set_zn8(cpu, cpu->yl);
+	} else {
+		cpu->y = cpu_pull16(cpu);
+		cpu_set_zn16(cpu, cpu->y);
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_rep(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	uint8_t val = cpu_read(cpu, addr);
+	cpu->p.raw &= ~val;
+	if (cpu->e) {
+		cpu->p.m = 1;
+		cpu->p.x = 1;
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_rol(CPU *cpu, AddrMode mode) {
+	if (mode == ImpAcc) {
+		if (cpu->p.m) {
+			bool old_c = cpu->p.c;
+			cpu->p.c = (cpu->al & 0x80) != 0;
+			cpu->al = (cpu->al << 1) | old_c;
+			cpu_set_zn8(cpu, cpu->al);
+		} else {
+			bool old_c = cpu->p.c;
+			cpu->p.c = (cpu->a & 0x8000) != 0;
+			cpu->a = (cpu->a << 1) | old_c;
+			cpu_set_zn16(cpu, cpu->a);
+		}
+		cpu_internal_tick(cpu);
+	} else {
+		uint32_t addr = cpu_oper_addr(cpu, mode);
+		if (cpu->p.m) {
+			uint8_t val = cpu_read(cpu, addr);
+			cpu_internal_tick(cpu);
+			bool old_c = cpu->p.c;
+			cpu->p.c = (val & 0x80) != 0;
+			val = (val << 1) | old_c;
+			cpu_write(cpu, addr, val);
+			cpu_set_zn8(cpu, val);
+		} else {
+			uint16_t val = cpu_read16(cpu, addr);
+			cpu_internal_tick(cpu);
+			bool old_c = cpu->p.c;
+			cpu->p.c = (val & 0x8000) != 0;
+			val = (val << 1) | old_c;
+			cpu_write16(cpu, addr, val);
+			cpu_set_zn16(cpu, val);
+		}
+	}
+}
+
+void cpu_op_ror(CPU *cpu, AddrMode mode) {
+	if (mode == ImpAcc) {
+		if (cpu->p.m) {
+			bool old_c = cpu->p.c;
+			cpu->p.c = (cpu->al & 0x01) != 0;
+			cpu->al = (cpu->al >> 1) | (old_c << 7);
+			cpu_set_zn8(cpu, cpu->al);
+		} else {
+			bool old_c = cpu->p.c;
+			cpu->p.c = (cpu->a & 0x01) != 0;
+			cpu->a = (cpu->a >> 1) | (old_c << 15);
+			cpu_set_zn16(cpu, cpu->a);
+		}
+		cpu_internal_tick(cpu);
+	} else {
+		uint32_t addr = cpu_oper_addr(cpu, mode);
+		if (cpu->p.m) {
+			uint8_t val = cpu_read(cpu, addr);
+			cpu_internal_tick(cpu);
+			bool old_c = cpu->p.c;
+			cpu->p.c = (val & 0x01) != 0;
+			val = (val >> 1) | (old_c << 7);
+			cpu_write(cpu, addr, val);
+			cpu_set_zn8(cpu, val);
+		} else {
+			uint16_t val = cpu_read16(cpu, addr);
+			cpu_internal_tick(cpu);
+			bool old_c = cpu->p.c;
+			cpu->p.c = (val & 0x01) != 0;
+			val = (val >> 1) | (old_c << 15);
+			cpu_write16(cpu, addr, val);
+			cpu_set_zn16(cpu, val);
+		}
+	}
+}
+
+void cpu_op_rti(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+	cpu_internal_tick(cpu);
+	uint8_t status = cpu_pull(cpu);
+	bool was_16bit_x = (cpu->p.x == 0);
+	cpu->p.raw = status;
+	if (cpu->e) {
+		cpu->p.m = 1;
+		cpu->p.x = 1;
+	}
+	if (was_16bit_x && cpu->p.x) {
+		cpu->xh = 0x00;
+		cpu->yh = 0x00;
+	}
+	cpu->pc = cpu_pull16(cpu);
+
+	if (!cpu->e) {
+		cpu->pb = cpu_pull(cpu);
+	}
+}
+
+void cpu_op_rtl(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+	cpu->pc = cpu_pull16(cpu) + 1;
+	cpu->pb = cpu_pull(cpu);
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_rts(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+	cpu->pc = cpu_pull16(cpu) + 1;
+	cpu_internal_tick(cpu);
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_sbc(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (cpu->p.m) {
+		uint8_t val = cpu_read(cpu, addr);
+		if (cpu->p.d) {
+			uint16_t l = (cpu->al & 0x0f) - (val & 0x0f) - !cpu->p.c;
+			uint16_t h = (cpu->al & 0xf0) - (val & 0xf0) - ((l & 0x10) ? 0x10 : 0);
+			cpu->p.z = ((cpu->al - val - !cpu->p.c) & 0xff) == 0;
+			cpu->p.v = ((cpu->al ^ val) & (cpu->al ^ h) & 0x80) != 0;
+			if (l & 0x10) h -= 0x06;
+			cpu->p.n = (h & 0x80) != 0;
+			cpu->p.c = (h < 0x100);
+			if (!cpu->p.c) h -= 0x60;
+			cpu->al = h & 0xff;
+		} else {
+			val = ~val;
+			uint16_t res = cpu->al + val + cpu->p.c;
+			cpu->p.v = (~(cpu->al ^ val) & (cpu->al ^ res) & 0x80) != 0;
+			cpu->p.c = res > 0xff;
+			cpu->al = res & 0xff;
+			cpu_set_zn8(cpu, cpu->al);
+		}
+	} else {
+		uint16_t val = cpu_read16(cpu, addr);
+		if (cpu->p.d) {
+			uint16_t n0 = (cpu->a & 0x000f) - (val & 0x000f) - !cpu->p.c;
+			uint16_t n1 = (cpu->a & 0x00f0) - (val & 0x00f0) - ((n0 & 0x0010) ? 0x0010 : 0);
+			uint16_t n2 = (cpu->a & 0x0f00) - (val & 0x0f00) - ((n1 & 0x0100) ? 0x0100 : 0);
+			uint32_t n3 = (cpu->a & 0xf000) - (val & 0xf000) - ((n2 & 0x1000) ? 0x1000 : 0);
+			cpu->p.z = ((cpu->a - val - !cpu->p.c) & 0xffff) == 0;
+			cpu->p.v = ((cpu->a ^ val) & (cpu->a ^ n3) & 0x8000) != 0;
+			if (n0 & 0x0010) n1 -= 0x0006;
+			if (n1 & 0x0100) n2 -= 0x0060;
+			if (n2 & 0x1000) n3 -= 0x0600;
+			cpu->p.n = (n3 & 0x8000) != 0;
+			cpu->p.c = (n3 < 0x10000);
+			if (!cpu->p.c) n3 -= 0x6000;
+			cpu->a = (n3 & 0xf000) | (n2 & 0x0f00) | (n1 & 0x00f0) | (n0 & 0x000f);
+		} else {
+			val = ~val;
+			uint32_t res = cpu->a + val + cpu->p.c;
+			cpu->p.v = (~(cpu->a ^ val) & (cpu->a ^ res) & 0x8000) != 0;
+			cpu->p.c = res > 0xffff;
+			cpu->a = res & 0xffff;
+			cpu_set_zn16(cpu, cpu->a);
+		}
+	}
+}
+
+void cpu_op_sec(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu->p.c = 1;
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_sed(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu->p.d = 1;
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_sei(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu->p.i = 1;
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_sep(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	uint8_t val = cpu_read(cpu, addr);
+	bool was_16bit_x = (cpu->p.x == 0);
+	cpu->p.raw |= val;
+	if (was_16bit_x && cpu->p.x) {
+		cpu->xh = 0x00;
+		cpu->yh = 0x00;
+	}
+	cpu_internal_tick(cpu);
 }
 
 void cpu_op_sta(CPU *cpu, AddrMode mode) {
@@ -377,9 +1114,30 @@ void cpu_op_sta(CPU *cpu, AddrMode mode) {
 	}
 }
 
-void cpu_op_stp(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("stp\n");}
-void cpu_op_stx(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("stx\n");}
-void cpu_op_sty(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("sty\n");}
+void cpu_op_stp(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu->stopped = true;
+	cpu_internal_tick(cpu);
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_stx(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (cpu->p.x) {
+		cpu_write(cpu, addr, cpu->xl);
+	} else {
+		cpu_write16(cpu, addr, cpu->x);
+	}
+}
+
+void cpu_op_sty(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (cpu->p.x) {
+		cpu_write(cpu, addr, cpu->yl);
+	} else {
+		cpu_write16(cpu, addr, cpu->y);
+	}
+}
 
 void cpu_op_stz(CPU *cpu, AddrMode mode) {
 	uint32_t addr = cpu_oper_addr(cpu, mode);
@@ -390,23 +1148,189 @@ void cpu_op_stz(CPU *cpu, AddrMode mode) {
 	}
 }
 
-void cpu_op_tax(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("tax\n");}
-void cpu_op_tay(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("tay\n");}
-void cpu_op_tcd(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("tcd\n");}
-void cpu_op_tcs(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("tcs\n");}
-void cpu_op_tdc(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("tdc\n");}
-void cpu_op_trb(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("trb\n");}
-void cpu_op_tsb(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("tsb\n");}
-void cpu_op_tsc(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("tsc\n");}
-void cpu_op_tsx(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("tsx\n");}
-void cpu_op_txa(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("txa\n");}
-void cpu_op_txs(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("txs\n");}
-void cpu_op_txy(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("txy\n");}
-void cpu_op_tya(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("tya\n");}
-void cpu_op_tyx(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("tyx\n");}
-void cpu_op_wai(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("wai\n");}
-void cpu_op_wdm(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("wdm\n");}
-void cpu_op_xba(CPU *cpu, AddrMode mode) {(void)cpu; (void)mode; ldeb1("xba\n");}
+void cpu_op_tax(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	if (cpu->p.x) {
+		cpu->xl = cpu->al;
+		cpu_set_zn8(cpu, cpu->xl);
+	} else {
+		cpu->x = cpu->a;
+		cpu_set_zn16(cpu, cpu->x);
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_tay(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	if (cpu->p.x) {
+		cpu->yl = cpu->al;
+		cpu_set_zn8(cpu, cpu->yl);
+	} else {
+		cpu->y = cpu->a;
+		cpu_set_zn16(cpu, cpu->y);
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_tcd(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu->d = cpu->a;
+	cpu_set_zn16(cpu, cpu->d);
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_tcs(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu->s = cpu->a;
+	if (cpu->e) {
+		cpu->s = 0x0100 | cpu->sl;
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_tdc(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu->a = cpu->d;
+	cpu_set_zn16(cpu, cpu->a);
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_trb(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (cpu->p.m) {
+		uint8_t val = cpu_read(cpu, addr);
+		cpu->p.z = ((cpu->al & val) == 0);
+		cpu_internal_tick(cpu);
+
+		val &= ~cpu->al;
+		cpu_write(cpu, addr, val);
+	} else {
+		uint16_t val = cpu_read16(cpu, addr);
+		cpu->p.z = ((cpu->a & val) == 0);
+		cpu_internal_tick(cpu);
+
+		val &= ~cpu->a;
+		cpu_write16(cpu, addr, val);
+	}
+}
+
+void cpu_op_tsb(CPU *cpu, AddrMode mode) {
+	uint32_t addr = cpu_oper_addr(cpu, mode);
+	if (cpu->p.m) {
+		uint8_t val = cpu_read(cpu, addr);
+		cpu->p.z = ((cpu->al & val) == 0);
+		cpu_internal_tick(cpu);
+
+		val |= cpu->al;
+		cpu_write(cpu, addr, val);
+	} else {
+		uint16_t val = cpu_read16(cpu, addr);
+		cpu->p.z = ((cpu->a & val) == 0);
+		cpu_internal_tick(cpu);
+
+		val |= cpu->a;
+		cpu_write16(cpu, addr, val);
+	}
+}
+
+void cpu_op_tsc(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu->a = cpu->s;
+	cpu_set_zn16(cpu, cpu->a);
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_tsx(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	if (cpu->p.x) {
+		cpu->xl = cpu->sl;
+		cpu_set_zn8(cpu, cpu->xl);
+	} else {
+		cpu->x = cpu->s;
+		cpu_set_zn16(cpu, cpu->x);
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_txa(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	if (cpu->p.m) {
+		cpu->al = cpu->xl;
+		cpu_set_zn8(cpu, cpu->al);
+	} else {
+		cpu->a = cpu->x;
+		cpu_set_zn16(cpu, cpu->a);
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_txs(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu->s = cpu->x;
+	if (cpu->e) {
+		cpu->s = 0x0100 | cpu->sl;
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_txy(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	if (cpu->p.x) {
+		cpu->yl = cpu->xl;
+		cpu_set_zn8(cpu, cpu->yl);
+	} else {
+		cpu->y = cpu->x;
+		cpu_set_zn16(cpu, cpu->y);
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_tya(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	if (cpu->p.m) {
+		cpu->al = cpu->yl;
+		cpu_set_zn8(cpu, cpu->al);
+	} else {
+		cpu->a = cpu->y;
+		cpu_set_zn16(cpu, cpu->a);
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_tyx(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	if (cpu->p.x) {
+		cpu->xl = cpu->yl;
+		cpu_set_zn8(cpu, cpu->xl);
+	} else {
+		cpu->x = cpu->y;
+		cpu_set_zn16(cpu, cpu->x);
+	}
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_wai(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu->waiting = true;
+	cpu_internal_tick(cpu);
+	cpu_internal_tick(cpu);
+}
+
+void cpu_op_wdm(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	uint8_t sig = cpu_read(cpu, cpu->pb << 16 | cpu->pc++);
+	ldeb1("cpu: hit wdm with sig: %02x\n", sig);
+}
+
+void cpu_op_xba(CPU *cpu, AddrMode mode) {
+	(void)mode;
+	cpu_internal_tick(cpu);
+	cpu_internal_tick(cpu);
+	uint8_t low = cpu->a & 0xff;
+	uint8_t high = cpu->a >> 8;
+	cpu->a = (low << 8) | high;
+	cpu_set_zn8(cpu, high);
+}
 
 void cpu_op_xce(CPU *cpu, AddrMode mode) {
 	(void)mode;
@@ -425,11 +1349,322 @@ void cpu_op_xce(CPU *cpu, AddrMode mode) {
 		cpu->x = cpu->xl;
 		cpu->y = cpu->yl;
 	}
-	cpu_internal_op(cpu);
+	cpu_internal_tick(cpu);
 }
 
 
+static const char *OP_NAMES[] = {
 
+	// add with carry
+	[0x61] = "adc DpXInd",
+	[0x63] = "adc Sr",
+	[0x65] = "adc Dp",
+	[0x67] = "adc DpIndL",
+	[0x69] = "adc ImmM",
+	[0x6d] = "adc Abs",
+	[0x6f] = "adc AbsL",
+	[0x71] = "adc DpIndY",
+	[0x72] = "adc DpInd",
+	[0x73] = "adc SrIndY",
+	[0x75] = "adc DpX",
+	[0x77] = "adc DpIndLY",
+	[0x79] = "adc AbsY",
+	[0x7d] = "adc AbsX",
+	[0x7f] = "adc AbsLX",
+
+	// bitwise and
+	[0x21] = "and DpXInd",
+	[0x23] = "and Sr",
+	[0x25] = "and Dp",
+	[0x27] = "and DpIndL",
+	[0x29] = "and ImmM",
+	[0x2d] = "and Abs",
+	[0x2f] = "and AbsL",
+	[0x31] = "and DpIndY",
+	[0x32] = "and DpInd",
+	[0x33] = "and SrIndY",
+	[0x35] = "and DpX",
+	[0x37] = "and DpIndLY",
+	[0x39] = "and AbsY",
+	[0x3d] = "and AbsX",
+	[0x3f] = "and AbsLX",
+
+	// bitwise or
+	[0x01] = "ora DpXInd",
+	[0x03] = "ora Sr",
+	[0x05] = "ora Dp",
+	[0x07] = "ora DpIndL",
+	[0x09] = "ora ImmM",
+	[0x0d] = "ora Abs",
+	[0x0f] = "ora AbsL",
+	[0x11] = "ora DpIndY",
+	[0x12] = "ora DpInd",
+	[0x13] = "ora SrIndY",
+	[0x15] = "ora DpX",
+	[0x17] = "ora DpIndLY",
+	[0x19] = "ora AbsY",
+	[0x1d] = "ora AbsX",
+	[0x1f] = "ora AbsLX",
+
+	// exclusive or
+	[0x41] = "eor DpXInd",
+	[0x43] = "eor Sr",
+	[0x45] = "eor Dp",
+	[0x47] = "eor DpIndL",
+	[0x49] = "eor ImmM",
+	[0x4d] = "eor Abs",
+	[0x4f] = "eor AbsL",
+	[0x51] = "eor DpIndY",
+	[0x52] = "eor DpInd",
+	[0x53] = "eor SrIndY",
+	[0x55] = "eor DpX",
+	[0x57] = "eor DpIndLY",
+	[0x59] = "eor AbsY",
+	[0x5d] = "eor AbsX",
+	[0x5f] = "eor AbsLX",
+
+	// subtract with carry
+	[0xe1] = "sbc DpXInd",
+	[0xe3] = "sbc Sr",
+	[0xe5] = "sbc Dp",
+	[0xe7] = "sbc DpIndL",
+	[0xe9] = "sbc ImmM",
+	[0xed] = "sbc Abs",
+	[0xef] = "sbc AbsL",
+	[0xf1] = "sbc DpIndY",
+	[0xf2] = "sbc DpInd",
+	[0xf3] = "sbc SrIndY",
+	[0xf5] = "sbc DpX",
+	[0xf7] = "sbc DpIndLY",
+	[0xf9] = "sbc AbsY",
+	[0xfd] = "sbc AbsX",
+	[0xff] = "sbc AbsLX",
+
+	// compare accumulator
+	[0xc1] = "cmp DpXInd",
+	[0xc3] = "cmp Sr",
+	[0xc5] = "cmp Dp",
+	[0xc7] = "cmp DpIndL",
+	[0xc9] = "cmp ImmM",
+	[0xcd] = "cmp Abs",
+	[0xcf] = "cmp AbsL",
+	[0xd1] = "cmp DpIndY",
+	[0xd2] = "cmp DpInd",
+	[0xd3] = "cmp SrIndY",
+	[0xd5] = "cmp DpX",
+	[0xd7] = "cmp DpIndLY",
+	[0xd9] = "cmp AbsY",
+	[0xdd] = "cmp AbsX",
+	[0xdf] = "cmp AbsLX",
+
+	// load accumulator
+	[0xa1] = "lda DpXInd",
+	[0xa3] = "lda Sr",
+	[0xa5] = "lda Dp",
+	[0xa7] = "lda DpIndL",
+	[0xa9] = "lda ImmM",
+	[0xad] = "lda Abs",
+	[0xaf] = "lda AbsL",
+	[0xb1] = "lda DpIndY",
+	[0xb2] = "lda DpInd",
+	[0xb3] = "lda SrIndY",
+	[0xb5] = "lda DpX",
+	[0xb7] = "lda DpIndLY",
+	[0xb9] = "lda AbsY",
+	[0xbd] = "lda AbsX",
+	[0xbf] = "lda AbsLX",
+
+	// store accumulator
+	[0x81] = "sta DpXInd",
+	[0x83] = "sta Sr",
+	[0x85] = "sta Dp",
+	[0x87] = "sta DpIndL",
+	[0x8d] = "sta Abs",
+	[0x8f] = "sta AbsL",
+	[0x91] = "sta DpIndY",
+	[0x92] = "sta DpInd",
+	[0x93] = "sta SrIndY",
+	[0x95] = "sta DpX",
+	[0x97] = "sta DpIndLY",
+	[0x99] = "sta AbsY",
+	[0x9d] = "sta AbsX",
+	[0x9f] = "sta AbsLX",
+
+	// load x & y
+	[0xa2] = "ldx ImmXY",
+	[0xa6] = "ldx Dp",
+	[0xae] = "ldx Abs",
+	[0xb6] = "ldx DpY",
+	[0xbe] = "ldx AbsY",
+	[0xa0] = "ldy ImmXY",
+	[0xa4] = "ldy Dp",
+	[0xac] = "ldy Abs",
+	[0xb4] = "ldy DpX",
+	[0xbc] = "ldy AbsX",
+
+	// store x, y, & zero
+	[0x86] = "stx Dp",
+	[0x8e] = "stx Abs",
+	[0x96] = "stx DpY",
+	[0x84] = "sty Dp",
+	[0x8c] = "sty Abs",
+	[0x94] = "sty DpX",
+	[0x64] = "stz Dp",
+	[0x74] = "stz DpX",
+	[0x9c] = "stz Abs",
+	[0x9e] = "stz AbsX",
+
+	// compare x & y
+	[0xe0] = "cpx ImmXY",
+	[0xe4] = "cpx Dp",
+	[0xec] = "cpx Abs",
+	[0xc0] = "cpy ImmXY",
+	[0xc4] = "cpy Dp",
+	[0xcc] = "cpy Abs",
+
+	// bit test
+	[0x24] = "bit Dp",
+	[0x2c] = "bit Abs",
+	[0x34] = "bit DpX",
+	[0x3c] = "bit AbsX",
+	[0x89] = "bit ImmM",
+
+	// arithmetic shift left
+	[0x06] = "asl Dp",
+	[0x0a] = "asl ImpAcc",
+	[0x0e] = "asl Abs",
+	[0x16] = "asl DpX",
+	[0x1e] = "asl AbsX",
+
+	// logical shift right
+	[0x46] = "lsr Dp",
+	[0x4a] = "lsr ImpAcc",
+	[0x4e] = "lsr Abs",
+	[0x56] = "lsr DpX",
+	[0x5e] = "lsr AbsX",
+
+	// rotate left
+	[0x26] = "rol Dp",
+	[0x2a] = "rol ImpAcc",
+	[0x2e] = "rol Abs",
+	[0x36] = "rol DpX",
+	[0x3e] = "rol AbsX",
+
+	// rotate right
+	[0x66] = "ror Dp",
+	[0x6a] = "ror ImpAcc",
+	[0x6e] = "ror Abs",
+	[0x76] = "ror DpX",
+	[0x7e] = "ror AbsX",
+
+	// branches
+	[0x90] = "bcc Rel",
+	[0xb0] = "bcs Rel",
+	[0xf0] = "beq Rel",
+	[0x30] = "bmi Rel",
+	[0xd0] = "bne Rel",
+	[0x10] = "bpl Rel",
+	[0x80] = "bra Rel",
+	[0x82] = "brl RelL",
+	[0x50] = "bvc Rel",
+	[0x70] = "bvs Rel",
+
+	// jumps and calls
+	[0x4c] = "jmp Abs",
+	[0x5c] = "jmp AbsL",
+	[0x6c] = "jmp AbsInd",
+	[0x7c] = "jmp AbsXInd",
+	[0xdc] = "jmp AbsIndL",
+	[0x20] = "jsr Abs",
+	[0x22] = "jsr AbsL",
+	[0xfc] = "jsr AbsXInd",
+
+	// returns
+	[0x40] = "rti Imp",
+	[0x60] = "rts Imp",
+	[0x6b] = "rtl Imp",
+
+	// flag operations
+	[0x18] = "clc Imp",
+	[0x38] = "sec Imp",
+	[0x58] = "cli Imp",
+	[0x78] = "sei Imp",
+	[0xb8] = "clv Imp",
+	[0xd8] = "cld Imp",
+	[0xf8] = "sed Imp",
+	[0xc2] = "rep Imm8",
+	[0xe2] = "sep Imm8",
+
+	// pushes
+	[0x08] = "php Imp",
+	[0x0b] = "phd Imp",
+	[0x48] = "pha Imp",
+	[0x4b] = "phk Imp",
+	[0x5a] = "phy Imp",
+	[0x8b] = "phb Imp",
+	[0xda] = "phx Imp",
+	[0xd4] = "pei DpInd",
+	[0xf4] = "pea Abs",
+	[0x62] = "per RelL",
+
+	// pulls
+	[0x28] = "plp Imp",
+	[0x2b] = "pld Imp",
+	[0x68] = "pla Imp",
+	[0x7a] = "ply Imp",
+	[0xab] = "plb Imp",
+	[0xfa] = "plx Imp",
+
+	// transfers
+	[0xaa] = "tax Imp",
+	[0xa8] = "tay Imp",
+	[0x8a] = "txa Imp",
+	[0x98] = "tya Imp",
+	[0xba] = "tsx Imp",
+	[0x9a] = "txs Imp",
+	[0x9b] = "txy Imp",
+	[0xbb] = "tyx Imp",
+	[0x5b] = "tcd Imp",
+	[0x7b] = "tdc Imp",
+	[0x1b] = "tcs Imp",
+	[0x3b] = "tsc Imp",
+
+	// increment & decrement
+	[0x1a] = "inc ImpAcc",
+	[0xe6] = "inc Dp",
+	[0xee] = "inc Abs",
+	[0xf6] = "inc DpX",
+	[0xfe] = "inc AbsX",
+	[0xe8] = "inx Imp",
+	[0xc8] = "iny Imp",
+	[0x3a] = "dec ImpAcc",
+	[0xc6] = "dec Dp",
+	[0xce] = "dec Abs",
+	[0xd6] = "dec DpX",
+	[0xde] = "dec AbsX",
+	[0xca] = "dex Imp",
+	[0x88] = "dey Imp",
+
+	// block moves
+	[0x44] = "mvp BlkMov",
+	[0x54] = "mvn BlkMov",
+
+	// test and reset/set bits
+	[0x14] = "trb Dp",
+	[0x1c] = "trb Abs",
+	[0x04] = "tsb Dp",
+	[0x0c] = "tsb Abs",
+
+	// misc
+	[0x00] = "brk Imp",
+	[0x02] = "cop Imp",
+	[0x42] = "wdm Imp",
+	[0xdb] = "stp Imp",
+	[0xcb] = "wai Imp",
+	[0xeb] = "xba Imp",
+	[0xfb] = "xce Imp",
+	[0xea] = "nop Imp",
+};
 
 
 void cpu_op_switch(CPU *cpu, uint8_t opcode) {
@@ -767,14 +2002,15 @@ void cpu_reset(CPU *cpu) {
 	cpu->db = 0;
 	cpu->pb = 0;
 	cpu->e = true;
-	cpu->s = 0xfd;
-	cpu->pc = cpu_read16(cpu, 0xfffc);
-	cpu->cycles = 7;
+	cpu->s = 0x01ff;
+	cpu->stopped = false;
+	cpu_interrupt(cpu, INT_RESET);
 }
 
 void cpu_step(CPU *cpu) {
 
-	if (cpu->stopped) {
+	if (cpu->waiting || cpu->stopped) {
+		cpu_internal_tick(cpu);
 		return;
 	}
 
@@ -788,6 +2024,8 @@ void cpu_step(CPU *cpu) {
 
 	uint8_t opcode = cpu_read(cpu, cpu->pb << 16 | cpu->pc++);
 
+	printf("%s\n", OP_NAMES[opcode]);
+
 	cpu_op_switch(cpu, opcode);
 }
 
@@ -795,7 +2033,7 @@ void cpu_run(CPU *cpu) {
 	// run until vblank
 	do {
 		cpu_step(cpu);
-	} while (!cpu->stopped && !cpu->bus->vblank_started);
+	} while (!cpu->bus->vblank_started);
 
 	cpu->bus->vblank_started = false;
 	// vblank interrupt

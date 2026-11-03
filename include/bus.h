@@ -14,6 +14,9 @@ typedef struct Bus {
 
 	uint8_t open_bus;
 
+	int last_wr_cycles;
+	uint64_t cycles;
+
 	bool vblank_started;
 } Bus;
 

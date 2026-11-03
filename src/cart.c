@@ -276,38 +276,21 @@ void cart_free(Cart *cart) {
 }
 
 uint8_t cart_read(Cart *cart, uint32_t addr) {
-	static const uint16_t width = 256;
-	static const uint16_t height = 240;
-	uint16_t x = (width - 1) - (addr >> 16);
-	uint16_t y = 239 - ((addr >> 8) & 0xff) * height / 256;
-	uint16_t idx = y * width + x;
-	uint32_t a;
-	uint8_t p;
 	switch (cart->layout) {
 		case ML_LOROM:
 			if (addr & 0x008000) { // rom
-				a = (((addr & 0x7f0000) >> 1) | (addr & 0x7fff)) & (cart->rom_size - 1);
-				p = a * 255 / cart->rom_size;
-				host_screen_buffer[idx] = 0xffff0000 | (p << 8);
-				return cart->rom[a];
+				cart->last_read_fast = cart->fastrom && (addr & 0x800000);
+				return cart->rom[(((addr & 0x7f0000) >> 1) | (addr & 0x7fff)) & (cart->rom_size - 1)];
 			} else if (addr & 0x400000 && cart->has_sram) { // sram
-				a = (((addr & 0x7f0000) >> 1) | (addr & 0x7fff)) & (cart->sram_size - 1);
-				p = a * 255 / cart->sram_size;
-				host_screen_buffer[idx] = 0xff00ff00 | p;
-				return cart->sram[a];
+				return cart->sram[(((addr & 0x7f0000) >> 1) | (addr & 0x7fff)) & (cart->sram_size - 1)];
 			}
 			return 0;
 		case ML_HIROM:
 			if (addr & 0x408000) { // rom
-				a = addr & (cart->rom_size - 1);
-				p = a * 255 / cart->rom_size;
-				host_screen_buffer[idx] = 0xffff0000 | (p << 8);
-				return cart->rom[a];
+				cart->last_read_fast = cart->fastrom && (addr & 0x800000);
+				return cart->rom[addr & (cart->rom_size - 1)];
 			} else if ((addr & 0x40e000) == 0x006000 && cart->has_sram) { // sram
-				a = (((addr & 0xff0000) >> 3) | (addr & 0x1fff)) & (cart->sram_size - 1);
-				p = a * 255 / cart->sram_size;
-				host_screen_buffer[idx] = 0xff00ff00 | p;
-				return cart->sram[a];
+				return cart->sram[(((addr & 0xff0000) >> 3) | (addr & 0x1fff)) & (cart->sram_size - 1)];
 			}
 			return 0;
 		default:

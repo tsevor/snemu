@@ -25,19 +25,29 @@ or use
 
 todo:
 - [ ] checklist is accurate
-- [X] cart loading
 - [X] bus
-  - [ ] lorom
-  - [ ] hirom
+- [ ] cart
+  - [X] loading
+  - [X] lorom
+  - [X] hirom
   - [ ] exhirom
   - [ ] exlorom
 - [ ] cpu
   - [X] research differences from 6502
-  - [ ] official opcodes
-  - [ ] interrupts
+  - [X] official opcodes
+  - [X] interrupts
   - [ ] mmio registers
-  - [ ] emulation mode
+  - [X] emulation mode
+- [ ] apu
+  - [ ] research differences from 6502
+  - [ ] official opcodes
+  - [ ] proper cpu interaction
+  - [ ] hardware timers
+  - [ ] apu dsp
+    - [ ] research + update todo
 - [ ] ppu
+  - [ ] basic registers
+  - [ ] all registers
   - [ ] basic state machine
   - [ ] implement basic rendering for smw
   - [ ] rendering modes
@@ -55,13 +65,6 @@ todo:
 - [ ] controller
   - [ ] basic controller
   - [ ] auto joypad
-- [ ] apu
-  - [ ] research differences from 6502
-  - [ ] official opcodes
-  - [ ] proper cpu interaction
-  - [ ] hardware timers
-  - [ ] apu dsp
-    - [ ] research + update todo
 - [ ] interaction features
   - [ ] dma
   - [ ] hdma

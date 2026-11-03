@@ -63,6 +63,7 @@ typedef struct CPU {
 	uint64_t stall;
 
 	bool stopped;
+	bool waiting;
 
 	Bus *bus;
 
