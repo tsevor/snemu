@@ -2024,7 +2024,8 @@ void cpu_step(CPU *cpu) {
 
 	uint8_t opcode = cpu_read(cpu, cpu->pb << 16 | cpu->pc++);
 
-	printf("%s\n", OP_NAMES[opcode]);
+	(void)OP_NAMES;
+	// printf("%s\n", OP_NAMES[opcode]);
 
 	cpu_op_switch(cpu, opcode);
 }

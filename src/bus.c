@@ -1,6 +1,7 @@
 #include "log.h"
 #include "bus.h"
 #include "host.h"
+#include "spc.h"
 
 
 void bus_init(Bus *bus) {
@@ -15,10 +16,12 @@ void bus_free(Bus *bus) {
 
 void bus_poweron(Bus *bus) {
 	cpu_poweron(bus->cpu);
+	spc_poweron(bus->spc);
 }
 
 void bus_reset(Bus *bus) {
 	cpu_reset(bus->cpu);
+	spc_reset(bus->spc);
 }
 
 void bus_next_fast(Bus *bus, bool fast) {
@@ -29,7 +32,13 @@ void bus_clock(Bus *bus) {
 	// clock components
 	bus->vblank_started = (bus->cpu->cycles & 0xffff) == 0; // force vblank for now
 	bus->cycles += bus->last_wr_cycles;
+
 	// if apu is behind, exec one instruction
+	bus->spc_cycle_acc += bus->last_wr_cycles * 1024000;
+	while (bus->spc_cycle_acc >= 21477270) {
+		spc_step(bus->spc);
+		bus->spc_cycle_acc -= 21477270;
+	}
 	// clock ppu every 4 cycles
 }
 
@@ -40,6 +49,9 @@ uint8_t bus_read(Bus *bus, uint32_t addr) {
 			case 0x0000 ... 0x1fff: // wram mirror
 				bus->last_wr_cycles = 8;
 				bus->open_bus = bus->wram[addr & 0xffff];
+				break;
+			case 0x2140 ... 0x217f:
+				bus->open_bus = spc_read_io_port(bus->spc, addr & 3);
 				break;
 			// TODO: ppu, cpu, and joypad mmio
 			default: // allow cart to take over
@@ -65,6 +77,9 @@ void bus_write(Bus *bus, uint32_t addr, uint8_t val) {
 			case 0x0000 ... 0x1fff:
 				bus->last_wr_cycles = 8;
 				bus->wram[addr & 0xffff] = val;
+				break;
+			case 0x2140 ... 0x217f:
+				spc_write_io_port(bus->spc, addr & 3, val);
 				break;
 			// TODO: ppu, cpu, and joypad mmio
 			default: // allow cart to take over

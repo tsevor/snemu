@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "cart.h"
+#include "spc.h"
 
 typedef struct CPU CPU;
 
@@ -10,12 +11,14 @@ typedef struct Bus {
 	uint8_t wram[128 << 10];
 
 	CPU *cpu;
+	SPC *spc;
 	Cart *cart;
 
 	uint8_t open_bus;
 
 	int last_wr_cycles;
 	uint64_t cycles;
+	uint64_t spc_cycle_acc;
 
 	bool vblank_started;
 } Bus;

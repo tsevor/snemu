@@ -2,6 +2,7 @@
 
 #include "cart.h"
 #include "cpu.h"
+#include "spc.h"
 #include "bus.h"
 #include "host.h"
 
@@ -30,16 +31,21 @@ int main(int argc, char **argv) {
 
 
 	// declare components
-	Bus bus = { .cart = &cart };
+	SPC spc = {0};
+	Bus bus = {
+		.spc = &spc,
+		.cart = &cart
+	};
 	CPU cpu = { .bus = &bus };
 
 	bus.cpu = &cpu;
+	
+	bus_poweron(&bus);
 
 	// init components
 	bus_init(&bus);
 	cpu_init(&cpu);
 
-	bus_poweron(&bus);
 
 	while (1) {
 		// vblank

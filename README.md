@@ -39,10 +39,10 @@ todo:
   - [ ] mmio registers
   - [X] emulation mode
 - [ ] apu
-  - [ ] research differences from 6502
+  - [X] research differences from 6502
   - [ ] official opcodes
-  - [ ] proper cpu interaction
-  - [ ] hardware timers
+  - [X] proper cpu interaction
+  - [X] hardware timers
   - [ ] apu dsp
     - [ ] research + update todo
 - [ ] ppu
