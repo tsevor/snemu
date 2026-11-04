@@ -20,6 +20,7 @@ typedef enum AddrMode {
 	ImmDp,
 	DpBit,
 	DpBitRel,
+	DpXRel,
 	AbsBit,
 	Abs,
 	AbsX,
@@ -234,6 +235,12 @@ uint16_t spc_oper_addr(SPC *spc, AddrMode mode) {
 			spc->oper_addr_ex = ++spc->pc + offs;
 			return dp_base | op8;
 
+		case DpXRel:
+			op8 = spc_read(spc, spc->pc++) + spc->x;
+			offs = (int8_t)spc_read(spc, spc->pc);
+			spc->oper_addr_ex = ++spc->pc + offs;
+			return dp_base | op8;
+
 		case DpX:
 			op8 = spc_read(spc, spc->pc++) + spc->x;
 			return dp_base | op8;
@@ -257,10 +264,15 @@ uint16_t spc_oper_addr(SPC *spc, AddrMode mode) {
 			return spc_read16wrap(spc, dp_base | op8) + spc->y;
 
 		case Abs:
-		case AbsBit:
 			op16 = spc_read16(spc, spc->pc);
 			spc->pc += 2;
 			return op16;
+
+		case AbsBit:
+			op16 = spc_read16(spc, spc->pc);
+			spc->pc += 2;
+			spc->oper_addr_ex = op16 >> 13;
+			return op16 & 0x1fff;
 
 		case AbsX:
 			op16 = spc_read16(spc, spc->pc);
@@ -301,6 +313,14 @@ uint16_t spc_oper_addr(SPC *spc, AddrMode mode) {
 	}
 }
 
+void spc_op_jmp(SPC *spc, uint16_t addr);
+
+void spc_branch(SPC *spc, bool condition, uint16_t addr) {
+	if (condition) {
+		spc_op_jmp(spc, addr);
+	}
+}
+
 uint8_t spc_op_adc(SPC *spc, uint8_t a, uint8_t b) {
 	int result = a + b + spc->p.c;
 
@@ -325,16 +345,71 @@ uint16_t spc_op_addw(SPC *spc, uint16_t a, uint16_t b) {
 	return res16;
 }
 
-uint8_t spc_op_inc(SPC *spc, uint8_t val) {
-	val++;
+uint8_t spc_op_and(SPC *spc, uint8_t a, uint8_t b) {
+	uint8_t res = a & b;
+	spc_set_zn(spc, res);
+	return res;
+}
+
+void spc_op_and1(SPC *spc, uint8_t bit) {
+	spc->p.c &= bit;
+}
+
+uint8_t spc_op_asl(SPC *spc, uint8_t val) {
+	spc->p.c = (val & 0x80) != 0;
+	val <<= 1;
 	spc_set_zn(spc, val);
 	return val;
 }
 
-uint16_t spc_op_incw(SPC *spc, uint16_t val) {
-	val++;
-	spc_set_zn16(spc, val);
-	return val;
+void spc_op_brk(SPC *spc) {
+	spc_push16(spc, spc->pc);
+	spc->p.b = 1;
+	spc_push(spc, spc->p.raw);
+	spc->p.i = 0;
+	spc_op_jmp(spc, spc_read16(spc, 0xffde));
+}
+
+void spc_op_call(SPC *spc, uint16_t addr) {
+	spc_push16(spc, spc->pc);
+	spc_op_jmp(spc, addr);
+}
+
+void spc_op_cmp(SPC *spc, uint8_t a, uint8_t b) {
+	spc->p.c = (a >= b);
+	spc_set_zn(spc, a - b);
+}
+
+void spc_op_cmpw(SPC *spc, uint16_t a, uint16_t b) {
+	spc->p.c = (a >= b);
+	spc_set_zn16(spc, a - b);
+}
+
+void spc_op_daa(SPC *spc) {
+	uint8_t src = spc->a;
+	if (((src & 0x0f) > 9) || spc->p.h) {
+		spc->a += 6;
+		if (spc->a < 6) {
+			spc->p.c = 1;
+		}
+	}
+	if ((src > 0x99) || spc->p.c) {
+		spc->a += 0x60;
+		spc->p.c = 1;
+	}
+	spc_set_zn(spc, spc->a);
+}
+
+void spc_op_das(SPC *spc) {
+	uint8_t src = spc->a;
+	if (!spc->p.h || ((src & 0x0f) > 9)) {
+		spc->a -= 6;
+	}
+	if (!spc->p.c || (src > 0x99)) {
+		spc->a -= 0x60;
+		spc->p.c = 0;
+	}
+	spc_set_zn(spc, spc->a);
 }
 
 uint8_t spc_op_dec(SPC *spc, uint8_t val) {
@@ -349,9 +424,63 @@ uint16_t spc_op_decw(SPC *spc, uint16_t val) {
 	return val;
 }
 
+void spc_op_div(SPC *spc) {
+	uint32_t ya = spc->ya;
+	uint32_t x = (uint32_t)spc->x << 9;
+	spc->p.h = ((spc->y & 0x0f) >= (spc->x & 0x0f));
+	for (int i = 0; i < 9; i++) {
+		ya <<= 1;
+		if (ya & 0x20000) ya = (ya & 0x1ffff) | 1;
+		if (ya >= x) ya ^= 1;
+		if (ya & 1) ya = (ya - x) & 0x1ffff;
+	}
+	spc->p.v = (ya & 0x100) != 0;
+	spc->a = ya & 0xff;
+	spc->y = (ya >> 9) & 0xff;
+	spc_set_zn(spc, spc->a);
+}
+
+uint8_t spc_op_eor(SPC *spc, uint8_t a, uint8_t b) {
+	uint8_t res = a ^ b;
+	spc_set_zn(spc, res);
+	return res;
+}
+
+void spc_op_eor1(SPC *spc, uint8_t bit) {
+	spc->p.c ^= bit;
+}
+
+uint8_t spc_op_inc(SPC *spc, uint8_t val) {
+	val++;
+	spc_set_zn(spc, val);
+	return val;
+}
+
+uint16_t spc_op_incw(SPC *spc, uint16_t val) {
+	val++;
+	spc_set_zn16(spc, val);
+	return val;
+}
+
+void spc_op_jmp(SPC *spc, uint16_t addr) {
+	spc->pc = addr;
+}
+
+uint8_t spc_op_lsr(SPC *spc, uint8_t val) {
+	spc->p.c = (val & 0x01) != 0;
+	val >>= 1;
+	spc_set_zn(spc, val);
+	return val;
+}
+
 uint8_t spc_op_mov(SPC *spc, uint8_t val) {
 	spc_set_zn(spc, val);
 	return val;
+}
+
+uint8_t spc_op_mov1(SPC *spc, uint8_t val, uint8_t bit) {
+	if (spc->p.c) return val | (1 << bit);
+	else          return val & ~(1 << bit);
 }
 
 uint8_t spc_op_mov_nf(SPC *spc, uint8_t val) {
@@ -369,81 +498,91 @@ uint16_t spc_op_movw_nf(SPC *spc, uint16_t val) {
 	return val;
 }
 
+void spc_op_mul(SPC *spc) {
+    spc->ya = (uint16_t)spc->y * (uint16_t)spc->a;
+    spc_set_zn(spc, spc->y); // N and Z are set based on Y only
+}
+
+uint8_t spc_op_not1(SPC *spc, uint8_t val, uint8_t bit) {
+	(void)spc;
+	return val ^ (1 << bit);
+}
+
+uint8_t spc_op_or(SPC *spc, uint8_t a, uint8_t b) {
+	uint8_t res = a | b;
+	spc_set_zn(spc, res);
+	return res;
+}
+
+void spc_op_or1(SPC *spc, uint8_t bit) {
+	spc->p.c |= bit;
+}
+
+uint8_t spc_op_rol(SPC *spc, uint8_t val) {
+	uint8_t old_c = spc->p.c;
+	spc->p.c = (val & 0x80) != 0;
+	val = (val << 1) | old_c;
+	spc_set_zn(spc, val);
+	return val;
+}
+
+uint8_t spc_op_ror(SPC *spc, uint8_t val) {
+	uint8_t old_c = spc->p.c;
+	spc->p.c = (val & 0x01) != 0;
+	val = (val >> 1) | (old_c << 7);
+	spc_set_zn(spc, val);
+	return val;
+}
+
+uint8_t spc_op_sbc(SPC *spc, uint8_t a, uint8_t b) {
+	int result = a - b - !spc->p.c;
+
+	spc->p.v = (((a ^ b) & (a ^ result) & 0x80)) != 0;
+	spc->p.h = (((a & 0x0f) - (b & 0x0f) - !spc->p.c) >= 0);
+	spc->p.c = (result >= 0);
+
+	uint8_t res8 = (uint8_t)result;
+	spc_set_zn(spc, res8);
+	return res8;
+}
+
+uint16_t spc_op_subw(SPC *spc, uint16_t a, uint16_t b) {
+	int32_t result = (int32_t)a - (int32_t)b;
+
+	spc->p.v = (((a ^ b) & (a ^ result) & 0x8000)) != 0;
+	spc->p.h = (((int)(a & 0x0fff) - (int)(b & 0x0fff)) >= 0);
+	spc->p.c = (result >= 0);
+
+	uint16_t res16 = (uint16_t)result;
+	spc_set_zn16(spc, res16);
+	return res16;
+}
+
+void spc_op_xcn(SPC *spc) {
+	spc->a = (spc->a >> 4) | (spc->a << 4);
+	spc_set_zn(spc, spc->a);
+}
+
 AddrMode ADDR_MODES[256] = {
-	[0x1a] = Dp,
-	[0x1d] = Imp,
-	[0x3a] = Dp,
-	[0x3d] = Imp,
-	[0x5d] = Imp,
-	[0x7a] = Dp,
-	[0x7d] = Imp,
-	[0x84] = Dp,
-	[0x85] = Abs,
-	[0x86] = Ind,
-	[0x87] = IndX,
-	[0x88] = Imm,
-	[0x89] = DpDp,
-	[0x8b] = Dp,
-	[0x8c] = Abs,
-	[0x8d] = Imm,
-	[0x8f] = ImmDp,
-	[0x94] = DpX,
-	[0x95] = AbsX,
-	[0x96] = AbsY,
-	[0x97] = IndY,
-	[0x98] = ImmDp,
-	[0x99] = IpIp,
-	[0x9b] = DpX,
-	[0x9c] = Imp,
-	[0x9d] = Imp,
-	[0xab] = Dp,
-	[0xac] = Abs,
-	[0xaf] = IndXi,
-	[0xba] = Dp,
-	[0xbb] = DpX,
-	[0xbc] = Imp,
-	[0xbd] = Imp,
-	[0xbf] = IndXi,
-	[0xc4] = Dp,
-	[0xc5] = Abs,
-	[0xc6] = Ind,
-	[0xc7] = IndX,
-	[0xc9] = Abs,
-	[0xcb] = Dp,
-	[0xcc] = Abs,
-	[0xcd] = Imm,
-	[0xd4] = DpX,
-	[0xd5] = AbsX,
-	[0xd6] = AbsY,
-	[0xd7] = IndY,
-	[0xd8] = Dp,
-	[0xd9] = DpY,
-	[0xda] = Dp,
-	[0xdb] = DpX,
-	[0xdc] = Imp,
-	[0xdd] = Imp,
-	[0xe4] = Dp,
-	[0xe5] = Abs,
-	[0xe6] = Ind,
-	[0xe7] = IndX,
-	[0xe8] = Imm,
-	[0xe9] = Abs,
-	[0xeb] = Dp,
-	[0xec] = Abs,
-	[0xf4] = DpX,
-	[0xf5] = AbsX,
-	[0xf6] = AbsY,
-	[0xf7] = IndY,
-	[0xf8] = Dp,
-	[0xf9] = DpY,
-	[0xfa] = DpDp,
-	[0xfb] = DpX,
-	[0xfc] = Imp,
-	[0xfd] = Imp,
+	Imp, Imp, Dp, DpBitRel, Dp,  Abs,  Ind,  IndX, Imm,   DpDp, AbsBit, Dp,  Abs, Imp, Abs,      Imp,
+	Rel, Imp, Dp, DpBitRel, DpX, AbsX, AbsY, IndY, ImmDp, IpIp, Dp,     DpX, Imp, Imp, Abs,      AbsX,
+	Imp, Imp, Dp, DpBitRel, Dp,  Abs,  Ind,  IndX, Imm,   DpDp, AbsBit, Dp,  Abs, Imp, DpBitRel, Rel,
+	Rel, Imp, Dp, DpBitRel, DpX, AbsX, AbsY, IndY, ImmDp, IpIp, Dp,     DpX, Imp, Imp, Dp,       Abs,
+	Imp, Imp, Dp, DpBitRel, Dp,  Abs,  Ind,  IndX, Imm,   DpDp, AbsBit, Dp,  Abs, Imp, Abs,      PCall,
+	Rel, Imp, Dp, DpBitRel, DpX, AbsX, AbsY, IndY, ImmDp, IpIp, Dp,     DpX, Imp, Imp, Abs,      Abs,
+	Imp, Imp, Dp, DpBitRel, Dp,  Abs,  Ind,  IndX, Imm,   DpDp, AbsBit, Dp,  Abs, Imp, DpBitRel, Imp,
+	Rel, Imp, Dp, DpBitRel, DpX, AbsX, AbsY, IndY, ImmDp, IpIp, Dp,     DpX, Imp, Imp, Dp,       Imp,
+	Imp, Imp, Dp, DpBitRel, Dp,  Abs,  Ind,  IndX, Imm,   DpDp, AbsBit, Dp,  Abs, Imm, Imp,      ImmDp,
+	Rel, Imp, Dp, DpBitRel, DpX, AbsX, AbsY, IndY, ImmDp, IpIp, Dp,     DpX, Imp, Imp, Imp,      Imp,
+	Imp, Imp, Dp, DpBitRel, Dp,  Abs,  Ind,  IndX, Imm,   DpDp, AbsBit, Dp,  Abs, Imm, Imp,      IndXi,
+	Rel, Imp, Dp, DpBitRel, DpX, AbsX, AbsY, IndY, ImmDp, IpIp, Dp,     DpX, Imp, Imp, Imp,      IndXi,
+	Imp, Imp, Dp, DpBitRel, Dp,  Abs,  Ind,  IndX, Imm,   Abs,  AbsBit, Dp,  Abs, Imm, Imp,      Imp,
+	Rel, Imp, Dp, DpBitRel, DpX, AbsX, AbsY, IndY, Dp,    DpY,  Dp,     DpX, Imp, Imp, DpXRel,   Imp,
+	Imp, Imp, Dp, DpBitRel, Dp,  Abs,  Ind,  IndX, Imm,   Abs,  AbsBit, Dp,  Abs, Imp, Imp,      Imp,
+	Rel, Imp, Dp, DpBitRel, DpX, AbsX, AbsY, IndY, Dp,    DpY,  DpDp,   DpX, Imp, Imp, Rel,      Imp,
 };
 
 void spc_op_switch(SPC *spc, uint8_t opcode) {
-	ldeb1("spc: %02x\n", opcode);
 	uint16_t addr = spc_oper_addr(spc, ADDR_MODES[opcode]);
 	uint8_t dst;
 	uint8_t src;
@@ -461,7 +600,8 @@ void spc_op_switch(SPC *spc, uint8_t opcode) {
 			spc->a = spc_op_adc(spc, spc->a, spc_read(spc, addr));
 			break;
 
-		case 0x7a: spc->ya = spc_op_addw(spc, spc->ya, spc_read16wrap(spc, addr));
+		case 0x7a:
+			spc->ya = spc_op_addw(spc, spc->ya, spc_read16wrap(spc, addr));
 			break;
 
 		case 0x89:
@@ -472,19 +612,235 @@ void spc_op_switch(SPC *spc, uint8_t opcode) {
 			spc_write(spc, addr, spc_op_adc(spc, dst, src));
 			break;
 
-		// inc
-		case 0xab:
-		case 0xac:
-		case 0xbb:
-			spc_write(spc, addr, spc_op_inc(spc, spc_read(spc, addr)));
+		// and
+		case 0x24:
+		case 0x25:
+		case 0x26:
+		case 0x27:
+		case 0x28:
+		case 0x34:
+		case 0x35:
+		case 0x36:
+		case 0x37:
+			spc->a = spc_op_and(spc, spc->a, spc_read(spc, addr));
 			break;
 
-		case 0x3a: spc_write16wrap(spc, addr, spc_op_incw(spc, spc_read16wrap(spc, addr)));
+		case 0x29:
+		case 0x38:
+		case 0x39:
+			src = spc_read(spc, spc->oper_addr_ex);
+			dst = spc_read(spc, addr);
+			spc_write(spc, addr, spc_op_and(spc, dst, src));
 			break;
 
-		case 0xbc: spc->a = spc_op_inc(spc, spc->a); break;
-		case 0x3d: spc->x = spc_op_inc(spc, spc->x); break;
-		case 0xfc: spc->y = spc_op_inc(spc, spc->y); break;
+		// asl
+		case 0x1c:
+			spc->a = spc_op_asl(spc, spc->a);
+			break;
+
+		case 0x0b:
+		case 0x1b:
+		case 0x0c:
+			spc_write(spc, addr, spc_op_asl(spc, spc_read(spc, addr)));
+			break;
+
+		// bbc
+		case 0x13:
+		case 0x33:
+		case 0x53:
+		case 0x73:
+		case 0x93:
+		case 0xb3:
+		case 0xd3:
+		case 0xf3:
+			spc_branch(spc, (spc_read(spc, addr) & (1 << (opcode >> 5))) == 0, spc->oper_addr_ex);
+			break;
+
+		// bbs
+		case 0x03:
+		case 0x23:
+		case 0x43:
+		case 0x63:
+		case 0x83:
+		case 0xa3:
+		case 0xc3:
+		case 0xe3:
+			spc_branch(spc, (spc_read(spc, addr) & (1 << (opcode >> 5))) != 0, spc->oper_addr_ex);
+			break;
+
+		// bit logic
+		case 0x0a:
+			spc_op_or1(spc, (spc_read(spc, addr) >> spc->oper_addr_ex) & 1);
+			break;
+
+		case 0x2a:
+			spc_op_or1(spc, !((spc_read(spc, addr) >> spc->oper_addr_ex) & 1));
+			break;
+
+		case 0x4a:
+			spc_op_and1(spc, (spc_read(spc, addr) >> spc->oper_addr_ex) & 1);
+			break;
+
+		case 0x6a:
+			spc_op_and1(spc, !((spc_read(spc, addr) >> spc->oper_addr_ex) & 1));
+			break;
+
+		case 0x8a:
+			spc_op_eor1(spc, (spc_read(spc, addr) >> spc->oper_addr_ex) & 1);
+			break;
+
+		case 0xaa:
+			spc->p.c = (spc_read(spc, addr) >> spc->oper_addr_ex) & 1;
+			break;
+
+		case 0xca:
+			spc_write(spc, addr, spc_op_mov1(spc, spc_read(spc, addr), spc->oper_addr_ex));
+			break;
+
+		case 0xea:
+			spc_write(spc, addr, spc_op_not1(spc, spc_read(spc, addr), spc->oper_addr_ex));
+			break;
+
+		// branches
+		case 0x10:
+			spc_branch(spc, !spc->p.n, addr);
+			break;
+
+		case 0x2f:
+			spc_branch(spc, true, addr);
+			break;
+
+		case 0x30:
+			spc_branch(spc, spc->p.n, addr);
+			break;
+
+		case 0x50:
+			spc_branch(spc, !spc->p.v, addr);
+			break;
+
+		case 0x70:
+			spc_branch(spc, spc->p.v, addr);
+			break;
+
+		case 0x90:
+			spc_branch(spc, !spc->p.c, addr);
+			break;
+
+		case 0xb0:
+			spc_branch(spc, spc->p.c, addr);
+			break;
+
+		case 0xd0:
+			spc_branch(spc, !spc->p.z, addr);
+			break;
+
+		case 0xf0:
+			spc_branch(spc, spc->p.z, addr);
+			break;
+
+		// call
+		case 0x3f:
+		case 0x4f:
+			spc_op_call(spc, addr);
+			break;
+
+		case 0x01:
+		case 0x11:
+		case 0x21:
+		case 0x31:
+		case 0x41:
+		case 0x51:
+		case 0x61:
+		case 0x71:
+		case 0x81:
+		case 0x91:
+		case 0xa1:
+		case 0xb1:
+		case 0xc1:
+		case 0xd1:
+		case 0xe1:
+		case 0xf1:
+			spc_op_call(spc, spc_read16(spc, 0xffde - (opcode >> 3)));
+			break;
+
+		// cbne
+		case 0x2e:
+		case 0xde:
+			spc_branch(spc, spc->a != spc_read(spc, addr), spc->oper_addr_ex);
+			break;
+
+		// clr1
+		case 0x12:
+		case 0x32:
+		case 0x52:
+		case 0x72:
+		case 0x92:
+		case 0xb2:
+		case 0xd2:
+		case 0xf2:
+			dst = spc_read(spc, addr);
+			dst &= ~(1 << (opcode >> 5));
+			spc_write(spc, addr, dst);
+			break;
+
+		// cmp
+		case 0x64:
+		case 0x65:
+		case 0x66:
+		case 0x67:
+		case 0x68:
+		case 0x74:
+		case 0x75:
+		case 0x76:
+		case 0x77:
+			spc_op_cmp(spc, spc->a, spc_read(spc, addr));
+			break;
+
+		case 0xc8:
+		case 0x3e:
+		case 0x1e:
+			spc_op_cmp(spc, spc->x, spc_read(spc, addr));
+			break;
+
+		case 0xad:
+		case 0x7e:
+		case 0x5e:
+			spc_op_cmp(spc, spc->y, spc_read(spc, addr));
+			break;
+
+		case 0x78:
+		case 0x69:
+		case 0x79:
+			src = spc_read(spc, spc->oper_addr_ex);
+			dst = spc_read(spc, addr);
+			spc_op_cmp(spc, dst, src);
+			break;
+
+		case 0x5a:
+			spc_op_cmpw(spc, spc->ya, spc_read16wrap(spc, addr));
+			break;
+
+		// daa
+		case 0xdf:
+			spc_op_daa(spc);
+			break;
+
+		// das
+		case 0xbe:
+			spc_op_das(spc);
+			break;
+
+		// dbnz
+		case 0x6e:
+			src = spc_read(spc, addr) - 1;
+			spc_write(spc, addr, src);
+			spc_branch(spc, src != 0, spc->oper_addr_ex);
+			break;
+
+		case 0xfe:
+			spc->y--;
+			spc_branch(spc, spc->y != 0, addr);
+			break;
 
 		// dec
 		case 0x8b:
@@ -493,11 +849,124 @@ void spc_op_switch(SPC *spc, uint8_t opcode) {
 			spc_write(spc, addr, spc_op_dec(spc, spc_read(spc, addr)));
 			break;
 
-		case 0x1a: spc_write16wrap(spc, addr, spc_op_decw(spc, spc_read16wrap(spc, addr))); break;
+		case 0x1a:
+			spc_write16wrap(spc, addr, spc_op_decw(spc, spc_read16wrap(spc, addr)));
+			break;
 
-		case 0x9c: spc->a = spc_op_dec(spc, spc->a); break;
-		case 0x1d: spc->x = spc_op_dec(spc, spc->x); break;
-		case 0xdc: spc->y = spc_op_dec(spc, spc->y); break;
+		case 0x9c:
+			spc->a = spc_op_dec(spc, spc->a);
+			break;
+
+		case 0x1d:
+			spc->x = spc_op_dec(spc, spc->x);
+			break;
+
+		case 0xdc:
+			spc->y = spc_op_dec(spc, spc->y);
+			break;
+
+		// div
+		case 0x9e:
+			spc_op_div(spc);
+			break;
+
+		// eor
+		case 0x44:
+		case 0x45:
+		case 0x46:
+		case 0x47:
+		case 0x48:
+		case 0x54:
+		case 0x55:
+		case 0x56:
+		case 0x57:
+			spc->a = spc_op_eor(spc, spc->a, spc_read(spc, addr));
+			break;
+
+		case 0x49:
+		case 0x58:
+		case 0x59:
+			src = spc_read(spc, spc->oper_addr_ex);
+			dst = spc_read(spc, addr);
+			spc_write(spc, addr, spc_op_eor(spc, dst, src));
+			break;
+
+		// flags
+		case 0x20:
+			spc->p.p = 0;
+			break;
+
+		case 0x40:
+			spc->p.p = 1;
+			break;
+
+		case 0x60:
+			spc->p.c = 0;
+			break;
+
+		case 0x80:
+			spc->p.c = 1;
+			break;
+
+		case 0xed:
+			spc->p.c = !spc->p.c;
+			break;
+
+		case 0xe0:
+			spc->p.v = 0;
+			spc->p.h = 0;
+			break;
+
+		case 0xa0:
+			spc->p.i = 1;
+			break;
+
+		case 0xc0:
+			spc->p.i = 0;
+			break;
+
+		// inc
+		case 0xab:
+		case 0xac:
+		case 0xbb:
+			spc_write(spc, addr, spc_op_inc(spc, spc_read(spc, addr)));
+			break;
+
+		case 0x3a:
+			spc_write16wrap(spc, addr, spc_op_incw(spc, spc_read16wrap(spc, addr)));
+			break;
+
+		case 0xbc:
+			spc->a = spc_op_inc(spc, spc->a);
+			break;
+
+		case 0x3d:
+			spc->x = spc_op_inc(spc, spc->x);
+			break;
+
+		case 0xfc:
+			spc->y = spc_op_inc(spc, spc->y);
+			break;
+
+		// jmp
+		case 0x1f:
+			spc_op_jmp(spc, spc_read16(spc, addr));
+			break;
+
+		case 0x5f:
+			spc_op_jmp(spc, addr);
+			break;
+
+		// lsr
+		case 0x5c:
+			spc->a = spc_op_lsr(spc, spc->a);
+			break;
+
+		case 0x4b:
+		case 0x5b:
+		case 0x4c:
+			spc_write(spc, addr, spc_op_lsr(spc, spc_read(spc, addr)));
+			break;
 
 		// mov
 		case 0xe4:
@@ -556,15 +1025,198 @@ void spc_op_switch(SPC *spc, uint8_t opcode) {
 			spc_write(spc, addr, spc_op_mov_nf(spc, spc_read(spc, spc->oper_addr_ex)));
 			break;
 
-		case 0xda: spc_write16wrap(spc, addr, spc_op_movw_nf(spc, spc->ya)); break;
+		case 0xda:
+			spc_write16wrap(spc, addr, spc_op_movw_nf(spc, spc->ya));
+			break;
 
-		case 0xba: spc->ya = spc_op_movw(spc, spc_read16wrap(spc, addr)); break;
-		case 0x7d: spc->a = spc_op_mov(spc, spc->x); break;
-		case 0x5d: spc->x = spc_op_mov(spc, spc->a); break;
-		case 0xdd: spc->a = spc_op_mov(spc, spc->y); break;
-		case 0xfd: spc->y = spc_op_mov(spc, spc->a); break;
-		case 0x9d: spc->x = spc_op_mov(spc, spc->sp); break;
-		case 0xbd: spc->sp = spc_op_mov_nf(spc, spc->x); break;
+		case 0xba:
+			spc->ya = spc_op_movw(spc, spc_read16wrap(spc, addr));
+			break;
+
+		case 0x7d:
+			spc->a = spc_op_mov(spc, spc->x);
+			break;
+
+		case 0x5d:
+			spc->x = spc_op_mov(spc, spc->a);
+			break;
+
+		case 0xdd:
+			spc->a = spc_op_mov(spc, spc->y);
+			break;
+
+		case 0xfd:
+			spc->y = spc_op_mov(spc, spc->a);
+			break;
+
+		case 0x9d:
+			spc->x = spc_op_mov(spc, spc->sp);
+			break;
+
+		case 0xbd:
+			spc->sp = spc_op_mov_nf(spc, spc->x);
+			break;
+
+		// mul
+		case 0xcf:
+			spc_op_mul(spc);
+			break;
+
+		// or
+		case 0x04:
+		case 0x05:
+		case 0x06:
+		case 0x07:
+		case 0x08:
+		case 0x14:
+		case 0x15:
+		case 0x16:
+		case 0x17:
+			spc->a = spc_op_or(spc, spc->a, spc_read(spc, addr));
+			break;
+
+		case 0x09:
+		case 0x18:
+		case 0x19:
+			src = spc_read(spc, spc->oper_addr_ex);
+			dst = spc_read(spc, addr);
+			spc_write(spc, addr, spc_op_or(spc, dst, src));
+			break;
+
+		// pop
+		case 0x8e:
+			spc->p.raw = spc_pull(spc);
+			break;
+
+		case 0xae:
+			spc->a = spc_pull(spc);
+			break;
+
+		case 0xce:
+			spc->x = spc_pull(spc);
+			break;
+
+		case 0xee:
+			spc->y = spc_pull(spc);
+			break;
+
+		// push
+		case 0x0d:
+			spc_push(spc, spc->p.raw);
+			break;
+
+		case 0x2d:
+			spc_push(spc, spc->a);
+			break;
+
+		case 0x4d:
+			spc_push(spc, spc->x);
+			break;
+
+		case 0x6d:
+			spc_push(spc, spc->y);
+			break;
+
+		// ret
+		case 0x7f:
+			spc->p.raw = spc_pull(spc);
+			// fallthrough
+		case 0x6f:
+			spc->pc = spc_pull16(spc);
+			break;
+
+		// rol
+		case 0x3c:
+			spc->a = spc_op_rol(spc, spc->a);
+			break;
+
+		case 0x2b:
+		case 0x3b:
+		case 0x2c:
+			spc_write(spc, addr, spc_op_rol(spc, spc_read(spc, addr)));
+			break;
+
+		// ror
+		case 0x7c:
+			spc->a = spc_op_ror(spc, spc->a);
+			break;
+
+		case 0x6b:
+		case 0x7b:
+		case 0x6c:
+			spc_write(spc, addr, spc_op_ror(spc, spc_read(spc, addr)));
+			break;
+
+		// sbc
+		case 0xa4:
+		case 0xa5:
+		case 0xa6:
+		case 0xa7:
+		case 0xa8:
+		case 0xb4:
+		case 0xb5:
+		case 0xb6:
+		case 0xb7:
+			spc->a = spc_op_sbc(spc, spc->a, spc_read(spc, addr));
+			break;
+
+		case 0x9a:
+			spc->ya = spc_op_subw(spc, spc->ya, spc_read16wrap(spc, addr));
+			break;
+
+		case 0xa9:
+		case 0xb8:
+		case 0xb9:
+			src = spc_read(spc, spc->oper_addr_ex);
+			dst = spc_read(spc, addr);
+			spc_write(spc, addr, spc_op_sbc(spc, dst, src));
+			break;
+
+		// set1
+		case 0x02:
+		case 0x22:
+		case 0x42:
+		case 0x62:
+		case 0x82:
+		case 0xa2:
+		case 0xc2:
+		case 0xe2:
+			dst = spc_read(spc, addr);
+			dst |= (1 << (opcode >> 5));
+			spc_write(spc, addr, dst);
+			break;
+
+		// tclr1
+		case 0x4e:
+			dst = spc_read(spc, addr);
+			spc_set_zn(spc, spc->a - dst);
+			spc_write(spc, addr, dst & ~spc->a);
+			break;
+
+		// tset1
+		case 0x0e:
+			dst = spc_read(spc, addr);
+			spc_set_zn(spc, spc->a - dst);
+			spc_write(spc, addr, dst | spc->a);
+			break;
+
+		// xcn
+		case 0x9f:
+			spc_op_xcn(spc);
+			break;
+
+		// system
+		case 0x00:
+			break;
+
+		case 0x0f:
+			spc_op_brk(spc);
+			break;
+
+		case 0xef:
+		case 0xff:
+			spc->stopped = true;
+			break;
 
 		default:
 			exit(1);
@@ -596,6 +1248,7 @@ int spc_step(SPC *spc) {
 		spc_clock(spc);
 	} else {
 		uint8_t opcode = spc_read(spc, spc->pc++);
+		printf("spc: %02x\n", opcode);
 		spc_op_switch(spc, opcode);
 	}
 

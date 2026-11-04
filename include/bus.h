@@ -18,7 +18,7 @@ typedef struct Bus {
 
 	int last_wr_cycles;
 	uint64_t cycles;
-	uint64_t spc_cycle_acc;
+	int64_t spc_cycle_acc;
 
 	bool vblank_started;
 } Bus;
