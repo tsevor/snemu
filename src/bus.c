@@ -36,8 +36,8 @@ void bus_clock(Bus *bus) {
 	// if apu is behind, exec one instruction
 	bus->spc_cycle_acc += bus->last_wr_cycles * 1024000;
 	while (bus->spc_cycle_acc >= 21477270) {
-		spc_step(bus->spc);
-		bus->spc_cycle_acc -= 21477270;
+		int spc_cycles = spc_step(bus->spc);
+		bus->spc_cycle_acc -= 21477270 * spc_cycles;
 	}
 	// clock ppu every 4 cycles
 }

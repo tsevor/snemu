@@ -2025,7 +2025,7 @@ void cpu_step(CPU *cpu) {
 	uint8_t opcode = cpu_read(cpu, cpu->pb << 16 | cpu->pc++);
 
 	(void)OP_NAMES;
-	// printf("%s\n", OP_NAMES[opcode]);
+	ldeb1("cpu: %02x\n", opcode);
 
 	cpu_op_switch(cpu, opcode);
 }

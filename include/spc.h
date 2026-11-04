@@ -54,6 +54,10 @@ typedef struct SPC {
 	uint8_t port_in[4];
 	uint8_t port_out[4];
 
+	uint16_t oper_addr_ex;
+
+	bool stopped;
+
 	uint64_t cycles;
 } SPC;
 
@@ -64,4 +68,4 @@ uint8_t spc_read_io_port(SPC *spc, int idx);
 void spc_poweron(SPC *spc);
 void spc_reset(SPC *spc);
 
-void spc_step(SPC *spc);
+int spc_step(SPC *spc);
