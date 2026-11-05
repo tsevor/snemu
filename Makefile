@@ -1,10 +1,8 @@
-HOST ?= sdl3
-
 CC = gcc
 CFLAGS = -Wall -Werror -Wextra -O3 -MMD -MP -flto -Iinclude
 LDFLAGS =
 
-ARGS = "roms/cputest-basic.sfc"
+HOST = sdl3
 TARGET = snemu
 
 ifeq ($(HOST), gtk4)
@@ -30,9 +28,9 @@ OBJS = $(patsubst src/%.c,bin/obj/%.o,$(SRCS))
 HOST_OBJ = $(patsubst src/%.c,bin/obj/%.o,$(HOST_SRC))
 DEPS = $(OBJS:.o=.d) $(HOST_OBJ:.o=.d)
 
-$(HOST_OBJ): CFLAGS += $(HOST_CFLAGS)
+.PHONY: all clean test
 
-.PHONY: all run clean
+$(HOST_OBJ): CFLAGS += $(HOST_CFLAGS)
 
 $(TARGET): $(OBJS) $(HOST_OBJ)
 	@mkdir -p $(dir $@)
@@ -43,9 +41,6 @@ bin/obj/%.o: src/%.c
 	@mkdir -p $(dir $@)
 	@echo -e '\tCC\t'$@
 	@$(CC) $(CFLAGS) -c $< -o $@
-
-run: $(TARGET)
-	./$(TARGET) $(ARGS)
 
 clean:
 	rm -rf bin

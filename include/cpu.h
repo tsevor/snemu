@@ -28,7 +28,13 @@ typedef struct CPU {
 		};
 	};
 
-	uint16_t pc;
+	union {
+		uint32_t pcf : 24;
+		struct {
+			uint16_t pc;
+			uint8_t pb;
+		};
+	};
 
 	union {
 		uint16_t s;
@@ -41,7 +47,6 @@ typedef struct CPU {
 	uint16_t d;
 
 	uint8_t db;
-	uint8_t pb;
 
 	bool e;
 
@@ -64,6 +69,8 @@ typedef struct CPU {
 
 	bool stopped;
 	bool waiting;
+	bool nmi_pending;
+	bool irq_pending;
 
 	Bus *bus;
 
@@ -75,3 +82,4 @@ void cpu_poweron(CPU *cpu);
 void cpu_reset(CPU *cpu);
 
 void cpu_run(CPU *cpu);
+void cpu_step(CPU *cpu);

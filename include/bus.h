@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "cart.h"
 #include "spc.h"
@@ -30,7 +31,7 @@ void bus_free(Bus *bus);
 void bus_poweron(Bus *bus);
 void bus_reset(Bus *bus);
 
-void bus_next_fast(Bus *bus, bool fast);
+void bus_next_fast(Bus *bus);
 void bus_clock(Bus *bus);
 
 uint8_t bus_read(Bus *bus, uint32_t addr);

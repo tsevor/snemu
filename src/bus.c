@@ -3,11 +3,12 @@
 #include "host.h"
 #include "spc.h"
 
+#include <stdbool.h>
+#include <string.h>
+
 
 void bus_init(Bus *bus) {
-	for (int i = 0; i < (128 << 10); i++) {
-		bus->wram[i] = 0;
-	}
+	memset(bus->wram, 0, sizeof(bus->wram));
 }
 
 void bus_free(Bus *bus) {
@@ -24,14 +25,20 @@ void bus_reset(Bus *bus) {
 	spc_reset(bus->spc);
 }
 
-void bus_next_fast(Bus *bus, bool fast) {
-	bus->cart->last_read_fast = fast;
+void bus_next_fast(Bus *bus) {
+	bus->last_wr_cycles = 6;
 }
 
 void bus_clock(Bus *bus) {
 	// clock components
-	bus->vblank_started = (bus->cpu->cycles & 0xffff) == 0; // force vblank for now
 	bus->cycles += bus->last_wr_cycles;
+
+	if (bus->cycles >= 357368) {
+		// force vblank approximately every frame
+		bus->vblank_started = true;
+		bus->cpu->nmi_pending = true;
+		bus->cycles -= 357368;
+	}
 
 	// if apu is behind, exec one instruction
 	bus->spc_cycle_acc += bus->last_wr_cycles * 1024000;
@@ -39,19 +46,19 @@ void bus_clock(Bus *bus) {
 		int spc_cycles = spc_step(bus->spc);
 		bus->spc_cycle_acc -= 21477270 * spc_cycles;
 	}
-	// clock ppu every 4 cycles
 }
 
 uint8_t bus_read(Bus *bus, uint32_t addr) {
 	if ((addr & 0x408000) == 0x000000) { // bottom half q1/q3
 		bus->last_wr_cycles = 12;
-		switch (addr & 0xffff) { // aux
+		uint16_t offset = addr & 0xffff;
+		switch (offset) { // aux
 			case 0x0000 ... 0x1fff: // wram mirror
 				bus->last_wr_cycles = 8;
-				bus->open_bus = bus->wram[addr & 0xffff];
+				bus->open_bus = bus->wram[offset];
 				break;
-			case 0x2140 ... 0x217f:
-				bus->open_bus = spc_read_io_port(bus->spc, addr & 3);
+			case 0x2140 ... 0x217f: // apu mmio
+				bus->open_bus = spc_read_io_port(bus->spc, offset & 3);
 				break;
 			// TODO: ppu, cpu, and joypad mmio
 			default: // allow cart to take over
@@ -73,13 +80,14 @@ void bus_write(Bus *bus, uint32_t addr, uint8_t val) {
 	bus->open_bus = val;
 	if (!(addr & 0x408000)) { // bottom half q1/q3
 		bus->last_wr_cycles = 12;
-		switch (addr & 0xffff) { // aux
-			case 0x0000 ... 0x1fff:
+		uint16_t offset = addr & 0xffff;
+		switch (offset) { // aux
+			case 0x0000 ... 0x1fff: // wram mirror
 				bus->last_wr_cycles = 8;
-				bus->wram[addr & 0xffff] = val;
+				bus->wram[offset] = val;
 				break;
-			case 0x2140 ... 0x217f:
-				spc_write_io_port(bus->spc, addr & 3, val);
+			case 0x2140 ... 0x217f: // apu mmio
+				spc_write_io_port(bus->spc, offset & 3, val);
 				break;
 			// TODO: ppu, cpu, and joypad mmio
 			default: // allow cart to take over

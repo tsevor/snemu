@@ -29,7 +29,6 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-
 	// declare components
 	SPC spc = {0};
 	Bus bus = {
@@ -39,13 +38,12 @@ int main(int argc, char **argv) {
 	CPU cpu = { .bus = &bus };
 
 	bus.cpu = &cpu;
-	
+
 	bus_poweron(&bus);
 
 	// init components
 	bus_init(&bus);
 	cpu_init(&cpu);
-
 
 	while (1) {
 		// vblank

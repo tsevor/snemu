@@ -46,8 +46,6 @@ uint8_t spc_read_io_port(SPC *spc, int idx) {
 };
 
 void spc_write_io_port(SPC *spc, int idx, uint8_t val) {
-	if (spc->ctrl.c23 && (idx & 2)) return;
-	else if (spc->ctrl.c01) return;
 	spc->port_in[idx] = val;
 };
 
@@ -110,7 +108,7 @@ uint8_t spc_read(SPC *spc, uint16_t addr) {
 			spc->timers[2].count = 0;
 			break;
 		case 0xffc0 ... 0xffff:
-			if (!spc->ctrl.brd) {
+			if (spc->ctrl.brd) {
 				val = SPC_BOOTROM[addr & 0x3f];
 				break;
 			}
@@ -364,8 +362,8 @@ uint8_t spc_op_asl(SPC *spc, uint8_t val) {
 
 void spc_op_brk(SPC *spc) {
 	spc_push16(spc, spc->pc);
-	spc->p.b = 1;
 	spc_push(spc, spc->p.raw);
+	spc->p.b = 1;
 	spc->p.i = 0;
 	spc_op_jmp(spc, spc_read16(spc, 0xffde));
 }
@@ -1213,7 +1211,7 @@ void spc_op_switch(SPC *spc, uint8_t opcode) {
 			spc_op_brk(spc);
 			break;
 
-		case 0xef:
+		case 0xef: // wait, but this spc700 has no hardware interrupts to resume it
 		case 0xff:
 			spc->stopped = true;
 			break;
@@ -1226,7 +1224,7 @@ void spc_op_switch(SPC *spc, uint8_t opcode) {
 void spc_reset(SPC *spc) {
 	spc->stopped = false;
 
-	spc->ctrl.raw = 0;
+	spc->ctrl.raw = 0x80;
 
 	for (int i = 0; i < 3; i++) {
 		spc->timers[i].stage = 0;
@@ -1248,7 +1246,7 @@ int spc_step(SPC *spc) {
 		spc_clock(spc);
 	} else {
 		uint8_t opcode = spc_read(spc, spc->pc++);
-		printf("spc: %02x\n", opcode);
+		// printf("spc: %02x\n", opcode);
 		spc_op_switch(spc, opcode);
 	}
 
