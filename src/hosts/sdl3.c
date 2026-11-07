@@ -9,10 +9,11 @@
 
 #include <SDL3/SDL.h>
 
-#define SNES_WIDTH 256
-#define SNES_HEIGHT 240
+// in some modes, ppu can have double res
+#define SNES_WIDTH 512
+#define SNES_HEIGHT 448
 
-#define PIXEL_SCALE 3
+#define PIXEL_SCALE 2
 
 #define MAX_EVENTS 16
 
@@ -21,11 +22,12 @@ uint32_t *host_screen_buffer = NULL;
 static struct {
 	uint32_t *buffer_front;
 	uint32_t *buffer_back;
-	uint8_t controller;
+	uint16_t controller;
 
 	SDL_Window* window;
 	SDL_Renderer* renderer;
 	SDL_Texture* texture;
+	SDL_Gamepad* gamepad;
 
 	SDL_AudioStream *audio_stream;
 
@@ -54,7 +56,7 @@ static void push_event(EmuCtlEventType type, void *arg) {
 
 int host_init() {
 
-	if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
+	if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
 		lerror("SDL_Init failed: %s\n", SDL_GetError());
 		return -1;
 	}
@@ -106,7 +108,7 @@ int host_init() {
 	SDL_AudioSpec spec = {
 		.freq = 32000,
 		.format = SDL_AUDIO_S16,
-		.channels = 1,
+		.channels = 2,
 	};
 
 	host.audio_stream = SDL_OpenAudioDeviceStream(
@@ -117,15 +119,25 @@ int host_init() {
 	);
 	if (!host.audio_stream) {
 		lerror("sdl: audio stream creation failed: %s\n", SDL_GetError());
-	} else
+	} else {
 		SDL_ResumeAudioStreamDevice(host.audio_stream);
+	}
+
+	int gamepad_count = 0;
+	SDL_JoystickID *gamepads = SDL_GetGamepads(&gamepad_count);
+	if (gamepads) {
+		if (gamepad_count > 0 && !host.gamepad) {
+			host.gamepad = SDL_OpenGamepad(gamepads[0]);
+		}
+		SDL_free(gamepads);
+	}
 
 	host.last_time = SDL_GetTicksNS();
 
 	return 0;
 }
 
-static void capture_screenshot(void) {
+static void capture_screenshot() {
 	SDL_Surface *surface = SDL_CreateSurfaceFrom(
 		SNES_WIDTH,
 		SNES_HEIGHT,
@@ -199,6 +211,18 @@ void host_frame() {
 					default:
 						break;
 				}
+				break;
+			case SDL_EVENT_GAMEPAD_ADDED:
+				if (!host.gamepad) {
+					host.gamepad = SDL_OpenGamepad(e.gdevice.which);
+				}
+				break;
+			case SDL_EVENT_GAMEPAD_REMOVED:
+				if (host.gamepad && SDL_GetGamepadID(host.gamepad) == e.gdevice.which) {
+					SDL_CloseGamepad(host.gamepad);
+					host.gamepad = NULL;
+				}
+				break;
 			default:
 				break;
 		}
@@ -206,21 +230,53 @@ void host_frame() {
 
 	const bool* kb_state = SDL_GetKeyboardState(NULL);
 
-	host.controller = (
-		  (kb_state[SDL_SCANCODE_S]     ? BUTTON_A      : 0)
-		| (kb_state[SDL_SCANCODE_A]     ? BUTTON_B      : 0)
-		| (kb_state[SDL_SCANCODE_Q]     ? BUTTON_SELECT : 0)
-		| (kb_state[SDL_SCANCODE_W]     ? BUTTON_START  : 0)
+	uint16_t pad = (
+		  (kb_state[SDL_SCANCODE_X]     ? BUTTON_B      : 0)
+		| (kb_state[SDL_SCANCODE_Z]     ? BUTTON_Y      : 0)
+		| (kb_state[SDL_SCANCODE_C]     ? BUTTON_SELECT : 0)
+		| (kb_state[SDL_SCANCODE_D]     ? BUTTON_START  : 0)
 		| (kb_state[SDL_SCANCODE_UP]    ? BUTTON_UP     : 0)
 		| (kb_state[SDL_SCANCODE_DOWN]  ? BUTTON_DOWN   : 0)
 		| (kb_state[SDL_SCANCODE_LEFT]  ? BUTTON_LEFT   : 0)
 		| (kb_state[SDL_SCANCODE_RIGHT] ? BUTTON_RIGHT  : 0)
+		| (kb_state[SDL_SCANCODE_S]     ? BUTTON_A      : 0)
+		| (kb_state[SDL_SCANCODE_A]     ? BUTTON_X      : 0)
+		| (kb_state[SDL_SCANCODE_Q]     ? BUTTON_L      : 0)
+		| (kb_state[SDL_SCANCODE_W]     ? BUTTON_R      : 0)
 	);
+
+	if (host.gamepad) {
+		if (SDL_GetGamepadButton(host.gamepad, SDL_GAMEPAD_BUTTON_SOUTH))          pad |= BUTTON_B;
+		if (SDL_GetGamepadButton(host.gamepad, SDL_GAMEPAD_BUTTON_WEST))           pad |= BUTTON_Y;
+		if (SDL_GetGamepadButton(host.gamepad, SDL_GAMEPAD_BUTTON_BACK))           pad |= BUTTON_SELECT;
+		if (SDL_GetGamepadButton(host.gamepad, SDL_GAMEPAD_BUTTON_START))          pad |= BUTTON_START;
+		if (SDL_GetGamepadButton(host.gamepad, SDL_GAMEPAD_BUTTON_DPAD_UP))        pad |= BUTTON_UP;
+		if (SDL_GetGamepadButton(host.gamepad, SDL_GAMEPAD_BUTTON_DPAD_DOWN))      pad |= BUTTON_DOWN;
+		if (SDL_GetGamepadButton(host.gamepad, SDL_GAMEPAD_BUTTON_DPAD_LEFT))      pad |= BUTTON_LEFT;
+		if (SDL_GetGamepadButton(host.gamepad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT))     pad |= BUTTON_RIGHT;
+		if (SDL_GetGamepadButton(host.gamepad, SDL_GAMEPAD_BUTTON_EAST))           pad |= BUTTON_A;
+		if (SDL_GetGamepadButton(host.gamepad, SDL_GAMEPAD_BUTTON_NORTH))          pad |= BUTTON_X;
+		if (SDL_GetGamepadButton(host.gamepad, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER))  pad |= BUTTON_L;
+		if (SDL_GetGamepadButton(host.gamepad, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) pad |= BUTTON_R;
+	}
+
+	if ((pad & BUTTON_UP) && (pad & BUTTON_DOWN)) {
+		pad &= ~(BUTTON_UP | BUTTON_DOWN);
+	}
+	if ((pad & BUTTON_LEFT) && (pad & BUTTON_RIGHT)) {
+		pad &= ~(BUTTON_LEFT | BUTTON_RIGHT);
+	}
+
+	host.controller = pad;
 
 	host.binds.sprint = kb_state[SDL_SCANCODE_RIGHTBRACKET];
 }
 
 void host_exit() {
+	if (host.gamepad) {
+		SDL_CloseGamepad(host.gamepad);
+		host.gamepad = NULL;
+	}
 	if (host.audio_stream) {
 		SDL_DestroyAudioStream(host.audio_stream);
 		host.audio_stream = NULL;
@@ -260,9 +316,13 @@ void host_copy_buffer() {
 }
 
 void host_queue_audio_buffer(int16_t *buffer, size_t len) {
-	if (host.audio_stream) {
-		SDL_PutAudioStreamData(host.audio_stream, buffer, len * sizeof(uint16_t));
-	}
+	if (!host.audio_stream) return;
+	SDL_PutAudioStreamData(host.audio_stream, buffer, len * sizeof(int16_t));
+}
+
+void host_clear_audio() {
+	if (!host.audio_stream) return;
+	SDL_ClearAudioStream(host.audio_stream);
 }
 
 void host_send_info(InfoType type, char *str) {
@@ -284,6 +344,6 @@ bool host_get_event(EmuCtlEvent *event) {
 	return true;
 }
 
-uint8_t host_get_controller() {
+uint16_t host_get_controller() {
 	return host.controller;
 }

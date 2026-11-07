@@ -1,6 +1,9 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
+
+#include "dsp.h"
 
 typedef struct SPC {
 	union {
@@ -59,6 +62,8 @@ typedef struct SPC {
 	bool stopped;
 
 	uint64_t cycles;
+
+	DSP dsp;
 } SPC;
 
 // main bus io

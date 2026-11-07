@@ -6,8 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NES_WIDTH 256
-#define NES_HEIGHT 240
+#define SNES_WIDTH 512
+#define SNES_HEIGHT 448
 #define MAX_EVENTS 16
 
 uint32_t *host_screen_buffer = NULL;
@@ -15,7 +15,7 @@ uint32_t *host_screen_buffer = NULL;
 static struct {
 	uint32_t *buffer_front;
 	uint32_t *buffer_back;
-	uint8_t controller;
+	uint16_t controller;
 	GtkWidget *window;
 	GtkWidget *canvas;
 	GtkWidget *toast;
@@ -51,14 +51,18 @@ static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval, 
 
 	switch (keyval) {
 		// controller
-		case GDK_KEY_s:     host.controller |= BUTTON_A;      break;
-		case GDK_KEY_a:     host.controller |= BUTTON_B;      break;
-		case GDK_KEY_q:     host.controller |= BUTTON_SELECT; break;
-		case GDK_KEY_w:     host.controller |= BUTTON_START;  break;
+		case GDK_KEY_x:     host.controller |= BUTTON_B;      break;
+		case GDK_KEY_z:     host.controller |= BUTTON_Y;      break;
+		case GDK_KEY_c:     host.controller |= BUTTON_SELECT; break;
+		case GDK_KEY_d:     host.controller |= BUTTON_START;  break;
 		case GDK_KEY_Up:    host.controller |= BUTTON_UP;     break;
 		case GDK_KEY_Down:  host.controller |= BUTTON_DOWN;   break;
 		case GDK_KEY_Left:  host.controller |= BUTTON_LEFT;   break;
 		case GDK_KEY_Right: host.controller |= BUTTON_RIGHT;  break;
+		case GDK_KEY_s:     host.controller |= BUTTON_A;      break;
+		case GDK_KEY_a:     host.controller |= BUTTON_X;      break;
+		case GDK_KEY_q:     host.controller |= BUTTON_L;      break;
+		case GDK_KEY_w:     host.controller |= BUTTON_R;      break;
 		// emu control once
 		case GDK_KEY_r: push_event(E_RESET, NULL); break;
 		// emu control held
@@ -78,14 +82,18 @@ static gboolean on_key_released(GtkEventControllerKey *controller, guint keyval,
 
 	switch (keyval) {
 		// controller
-		case GDK_KEY_s:     host.controller &= ~BUTTON_A;      break;
-		case GDK_KEY_a:     host.controller &= ~BUTTON_B;      break;
-		case GDK_KEY_q:     host.controller &= ~BUTTON_SELECT; break;
-		case GDK_KEY_w:     host.controller &= ~BUTTON_START;  break;
+		case GDK_KEY_x:     host.controller &= ~BUTTON_B;      break;
+		case GDK_KEY_z:     host.controller &= ~BUTTON_Y;      break;
+		case GDK_KEY_c:     host.controller &= ~BUTTON_SELECT; break;
+		case GDK_KEY_d:     host.controller &= ~BUTTON_START;  break;
 		case GDK_KEY_Up:    host.controller &= ~BUTTON_UP;     break;
 		case GDK_KEY_Down:  host.controller &= ~BUTTON_DOWN;   break;
 		case GDK_KEY_Left:  host.controller &= ~BUTTON_LEFT;   break;
 		case GDK_KEY_Right: host.controller &= ~BUTTON_RIGHT;  break;
+		case GDK_KEY_s:     host.controller &= ~BUTTON_A;      break;
+		case GDK_KEY_a:     host.controller &= ~BUTTON_X;      break;
+		case GDK_KEY_q:     host.controller &= ~BUTTON_L;      break;
+		case GDK_KEY_w:     host.controller &= ~BUTTON_R;      break;
 		// emu control held
 		case GDK_KEY_bracketright: host.binds.sprint = false; break;
 		// no key
@@ -102,12 +110,12 @@ static void on_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height, gp
 	cairo_set_source_rgb(cr, 0, 0, 0);
 	cairo_paint(cr);
 
-	double scale_x = (double)width / NES_WIDTH;
-	double scale_y = (double)height / NES_HEIGHT;
+	double scale_x = (double)width / SNES_WIDTH;
+	double scale_y = (double)height / SNES_HEIGHT;
 	double scale = (scale_x < scale_y) ? scale_x : scale_y;
 
-	double offset_x = (width - (NES_WIDTH * scale)) / 2.0;
-	double offset_y = (height - (NES_HEIGHT * scale)) / 2.0;
+	double offset_x = (width - (SNES_WIDTH * scale)) / 2.0;
+	double offset_y = (height - (SNES_HEIGHT * scale)) / 2.0;
 
 	cairo_translate(cr, offset_x, offset_y);
 	cairo_scale(cr, scale, scale);
@@ -115,9 +123,9 @@ static void on_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height, gp
 	cairo_surface_t *surface = cairo_image_surface_create_for_data(
 		(unsigned char *)host.buffer_front,
 		CAIRO_FORMAT_ARGB32,
-		NES_WIDTH,
-		NES_HEIGHT,
-		NES_WIDTH * 4
+		SNES_WIDTH,
+		SNES_HEIGHT,
+		SNES_WIDTH * 4
 	);
 
 	cairo_set_source_surface(cr, surface, 0, 0);
@@ -137,15 +145,15 @@ static void on_window_close(GtkWindow *win, gpointer data) {
 int host_init() {
 	lhost("gtk: init\n");
 
-	host.buffer_front = malloc(NES_WIDTH * NES_HEIGHT * sizeof(uint32_t));
-	host.buffer_back = malloc(NES_WIDTH * NES_HEIGHT * sizeof(uint32_t));
+	host.buffer_front = malloc(SNES_WIDTH * SNES_HEIGHT * sizeof(uint32_t));
+	host.buffer_back = malloc(SNES_WIDTH * SNES_HEIGHT * sizeof(uint32_t));
 	host_screen_buffer = host.buffer_back;
 
 	adw_init();
 
 	host.window = gtk_window_new();
 	gtk_window_set_title(GTK_WINDOW(host.window), "snemu");
-	gtk_window_set_default_size(GTK_WINDOW(host.window), NES_WIDTH * 2, NES_HEIGHT * 2);
+	gtk_window_set_default_size(GTK_WINDOW(host.window), SNES_WIDTH * 2, SNES_HEIGHT * 2);
 	g_signal_connect(host.window, "close-request", G_CALLBACK(on_window_close), NULL);
 
 	host.canvas = gtk_drawing_area_new();
@@ -179,7 +187,7 @@ void host_frame() {
 	}
 }
 
-void host_exit(int code) {
+void host_exit() {
 	free(host.buffer_front);
 	free(host.buffer_back);
 }
@@ -199,6 +207,9 @@ void host_queue_audio_buffer(int16_t *buffer, size_t len) {
 	(void)buffer;
 	(void)len;
 	// how to do in gtk?
+}
+
+void host_clear_audio() {
 }
 
 void host_send_info(InfoType type, char *str) {
@@ -228,6 +239,6 @@ bool host_get_event(EmuCtlEvent *event) {
 	return true;
 }
 
-uint8_t host_get_controller() {
+uint16_t host_get_controller() {
 	return host.controller;
 }

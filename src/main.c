@@ -4,6 +4,7 @@
 #include "cpu.h"
 #include "spc.h"
 #include "bus.h"
+#include "ppu.h"
 #include "host.h"
 
 int loglevel = 3;
@@ -31,23 +32,28 @@ int main(int argc, char **argv) {
 
 	// declare components
 	SPC spc = {0};
+	PPU ppu = {0};
 	Bus bus = {
 		.spc = &spc,
+		.ppu = &ppu,
 		.cart = &cart
 	};
 	CPU cpu = { .bus = &bus };
 
 	bus.cpu = &cpu;
+	ppu.bus = &bus;
 
 	bus_poweron(&bus);
 
 	// init components
 	bus_init(&bus);
 	cpu_init(&cpu);
+	ppu_init(&ppu);
 
 	while (1) {
 		// vblank
 		cpu_run(&cpu);
+		dsp_flush(&spc.dsp);
 		host_frame();
 		// controller state update
 		EmuCtlEvent e;

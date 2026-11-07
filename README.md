@@ -40,11 +40,19 @@ todo:
   - [X] emulation mode
 - [ ] apu
   - [X] research differences from 6502
-  - [ ] official opcodes
+  - [X] official opcodes
   - [X] proper cpu interaction
   - [X] hardware timers
   - [ ] apu dsp
-    - [ ] research + update todo
+    - [X] spc register mmio
+    - [ ] brr/adpcm decoding
+    - [ ] adsr & gain (envelope generation)
+    - [ ] pitch & frequency control
+    - [ ] voice mixing (8 channels)
+    - [ ] noise generation
+    - [ ] pitch modulation (pmon)
+    - [ ] echo ring buffer & delay
+    - [ ] 8-tap fir filter
 - [ ] ppu
   - [ ] basic registers
   - [ ] all registers

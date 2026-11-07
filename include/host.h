@@ -7,14 +7,18 @@
 // everything in here should be a blind interface
 
 typedef enum ControllerButton {
-	BUTTON_A      = 0x01,
-	BUTTON_B      = 0x02,
-	BUTTON_SELECT = 0x04,
-	BUTTON_START  = 0x08,
-	BUTTON_UP     = 0x10,
-	BUTTON_DOWN   = 0x20,
-	BUTTON_LEFT   = 0x40,
-	BUTTON_RIGHT  = 0x80,
+	BUTTON_B      = 0x0001,
+	BUTTON_Y      = 0x0002,
+	BUTTON_SELECT = 0x0004,
+	BUTTON_START  = 0x0008,
+	BUTTON_UP     = 0x0010,
+	BUTTON_DOWN   = 0x0020,
+	BUTTON_LEFT   = 0x0040,
+	BUTTON_RIGHT  = 0x0080,
+	BUTTON_A      = 0x0100,
+	BUTTON_X      = 0x0200,
+	BUTTON_L      = 0x0400,
+	BUTTON_R      = 0x0800,
 } ControllerButton;
 
 typedef enum EmuCtlEventType {
@@ -53,8 +57,11 @@ void host_swap_buffer();
 // copy exposed buffer to internal one
 void host_copy_buffer();
 
-// queue 'len' samples of audio to play
+// queue 'len' stereo interlaced samples (l, r, l, r...) to play
 void host_queue_audio_buffer(int16_t *buffer, size_t len);
+
+// clears pending audio buffers
+void host_clear_audio();
 
 // sends info for host to display
 void host_send_info(InfoType type, char *str);
@@ -63,4 +70,4 @@ void host_send_info(InfoType type, char *str);
 bool host_get_event(EmuCtlEvent *event);
 
 // returns controller state
-uint8_t host_get_controller();
+uint16_t host_get_controller();

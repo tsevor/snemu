@@ -1778,7 +1778,13 @@ void cpu_reset(CPU *cpu) {
 void cpu_step(CPU *cpu) {
 	if (cpu->nmi_pending) {
 		cpu->nmi_pending = false;
+		cpu->waiting = false;
 		cpu_interrupt(cpu, INT_NMI);
+	} else if (cpu->irq_pending) {
+		cpu->waiting = false;
+		if (!cpu->p.i) {
+			cpu_interrupt(cpu, INT_IRQ);
+		}
 	}
 
 	if (cpu->waiting || cpu->stopped) {

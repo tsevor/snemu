@@ -87,11 +87,18 @@ void spc_tick_timers(SPC *spc) {
 void spc_clock(SPC *spc) {
 	spc->cycles++;
 	if (spc->cycles % 16 == 0) spc_tick_timers(spc);
+	dsp_step(&spc->dsp);
 }
 
 uint8_t spc_read(SPC *spc, uint16_t addr) {
 	uint8_t val;
 	switch (addr) {
+		case 0x00f2:
+			val = spc->dsp.addr;
+			break;
+		case 0x00f3:
+			val = dsp_read(&spc->dsp, spc->dsp.addr & 0x7f);
+			break;
 		case 0x00f4 ... 0x00f7: // cpuio0-3
 			val = spc->port_in[addr & 3];
 			break;
@@ -141,10 +148,10 @@ void spc_write(SPC *spc, uint16_t addr, uint8_t val) {
 			if (!spc->ctrl.t2) spc->timers[2].count = 0;
 			break;
 		case 0x00f2:
-			// TODO: dspaddr
+			spc->dsp.addr = val;
 			break;
 		case 0x00f3:
-			// TODO: dspdata
+			dsp_write(&spc->dsp, spc->dsp.addr & 0x7f, val);
 			break;
 		case 0x00f4 ... 0x00f7: // cpuio0-3
 			spc->port_out[addr & 3] = val;
@@ -1231,10 +1238,13 @@ void spc_reset(SPC *spc) {
 		spc->timers[i].count = 0;
 	}
 
+	dsp_reset(&spc->dsp);
+
 	spc->pc = spc_read16(spc, 0xfffe);
 }
 
 void spc_poweron(SPC *spc) {
+	dsp_init(&spc->dsp, spc->ram);
 	spc->sp = 0xff;
 	spc_reset(spc);
 }

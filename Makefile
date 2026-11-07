@@ -30,12 +30,12 @@ DEPS = $(OBJS:.o=.d) $(HOST_OBJ:.o=.d)
 
 .PHONY: all clean test
 
-$(HOST_OBJ): CFLAGS += $(HOST_CFLAGS)
-
 $(TARGET): $(OBJS) $(HOST_OBJ)
 	@mkdir -p $(dir $@)
 	@echo -e '\tCC\t'$@
 	@$(CC) $(CFLAGS) $(OBJS) $(HOST_OBJ) -o $(TARGET) $(LDFLAGS)
+
+$(HOST_OBJ): CFLAGS += $(HOST_CFLAGS)
 
 bin/obj/%.o: src/%.c
 	@mkdir -p $(dir $@)
@@ -44,5 +44,6 @@ bin/obj/%.o: src/%.c
 
 clean:
 	rm -rf bin
+	rm -f $(TARGET)
 
 -include $(DEPS)
