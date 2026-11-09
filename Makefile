@@ -23,7 +23,7 @@ else
 	$(error unknown HOST '$(HOST)')
 endif
 
-SRCS = $(wildcard src/*.c src/mappers/*.c)
+SRCS = $(wildcard src/*.c)
 OBJS = $(patsubst src/%.c,bin/obj/%.o,$(SRCS))
 HOST_OBJ = $(patsubst src/%.c,bin/obj/%.o,$(HOST_SRC))
 DEPS = $(OBJS:.o=.d) $(HOST_OBJ:.o=.d)

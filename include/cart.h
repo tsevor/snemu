@@ -65,7 +65,7 @@ typedef enum CountryCode {
 	CC_OTHER_VAR_3   = 20,
 } CountryCode;
 
-typedef struct __attribute__((packed)) RomHeader {
+typedef struct __attribute__((packed, gcc_struct)) RomHeader {
 	char maker[2];           // ffb0
 	char game[4];            // ffb2
 	uint8_t reserved[6];     // ffb6
@@ -103,7 +103,7 @@ typedef struct __attribute__((packed)) RomHeader {
 } RomHeader;
 
 
-typedef struct __attribute__((packed)) Cart {
+typedef struct Cart {
 
 	char *filename;
 	char *savefile;

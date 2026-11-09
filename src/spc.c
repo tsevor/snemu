@@ -97,7 +97,7 @@ uint8_t spc_read(SPC *spc, uint16_t addr) {
 			val = spc->dsp.addr;
 			break;
 		case 0x00f3:
-			val = dsp_read(&spc->dsp, spc->dsp.addr & 0x7f);
+			val = dsp_read(&spc->dsp);
 			break;
 		case 0x00f4 ... 0x00f7: // cpuio0-3
 			val = spc->port_in[addr & 3];
@@ -151,7 +151,7 @@ void spc_write(SPC *spc, uint16_t addr, uint8_t val) {
 			spc->dsp.addr = val;
 			break;
 		case 0x00f3:
-			dsp_write(&spc->dsp, spc->dsp.addr & 0x7f, val);
+			dsp_write(&spc->dsp, val);
 			break;
 		case 0x00f4 ... 0x00f7: // cpuio0-3
 			spc->port_out[addr & 3] = val;

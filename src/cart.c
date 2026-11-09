@@ -46,7 +46,7 @@ int header_score(uint8_t *rom, uint32_t addr, uint32_t rom_size) {
 	}
 
 	// check opcode at reset vector
-	uint8_t op = rom[addr + (header->vece_reset & 0x7FFF)];
+	uint8_t op = rom[addr + (header->vece_reset & 0x7fff)];
 	switch (op) {
 		case 0x18: // clc
 		case 0x78: // sei
@@ -80,14 +80,14 @@ int header_score(uint8_t *rom, uint32_t addr, uint32_t rom_size) {
 
 bool corrupted_header(RomHeader *header) {
 	// more code from mesen
-	int badHeaderCounter =
+	int bad_header_counter =
 		(header->sram_size  >= 0x10)
 		+ (header->chipset  == 0xf && header->coproc == 0xf)
 		+ (header->country  == 0xff)
 		+ (header->dev_id   == 0xff)
 		+ (header->rom_size == 0xff)
 		+ (header->layout   == 0xf && header->fastrom == 1 && header->magic == 0x7);
-	return badHeaderCounter > 2;
+	return bad_header_counter > 2;
 }
 
 static uint32_t base_addresses[] = {
