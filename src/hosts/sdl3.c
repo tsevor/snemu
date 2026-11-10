@@ -10,8 +10,6 @@
 #include <SDL3/SDL.h>
 
 // in some modes, ppu can have double res
-#define SNES_WIDTH 512
-#define SNES_HEIGHT 448
 
 #define PIXEL_SCALE 2
 
@@ -180,9 +178,9 @@ void host_frame() {
 
 	SDL_UpdateTexture(host.texture, NULL, host.buffer_front, SNES_WIDTH * sizeof(uint32_t));
 
-    SDL_RenderClear(host.renderer);
-    SDL_RenderTexture(host.renderer, host.texture, NULL, NULL);
-    SDL_RenderPresent(host.renderer);
+	SDL_RenderClear(host.renderer);
+	SDL_RenderTexture(host.renderer, host.texture, NULL, NULL);
+	SDL_RenderPresent(host.renderer);
 
 	int sleep_time = (1000000000 / 60) - (SDL_GetTicksNS() - host.last_time);
 	if (!host.binds.sprint && sleep_time > 0)

@@ -6,7 +6,7 @@
 #include "host.h"
 #include "log.h"
 
-static const int16_t GAUSS_TABLE[512] = {
+static const int16_t DSP_GAUSS[512] = {
 	   0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
 	   1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    2,    2,    2,    2,    2,
 	   2,    2,    3,    3,    3,    3,    3,    4,    4,    4,    4,    4,    5,    5,    5,    5,
@@ -42,7 +42,7 @@ static const int16_t GAUSS_TABLE[512] = {
 };
 
 
-static const uint16_t RATES_TABLE[32] = {
+static const uint16_t DSP_RATES[32] = {
 	65535, 2048, 1536, 1280,
 	 1024,  768,  640,  512,
 	  384,  320,  256,  192,
@@ -53,7 +53,7 @@ static const uint16_t RATES_TABLE[32] = {
 	    4,    3,    2,    1,
 };
 
-static const uint16_t OFFS_TABLE[32] = {
+static const uint16_t DSP_OFFS[32] = {
 	  1, 0, 1040,
 	536, 0, 1040,
 	536, 0, 1040,
@@ -68,7 +68,7 @@ static const uint16_t OFFS_TABLE[32] = {
 };
 
 static inline bool dsp_check_counter(DSP *dsp, int32_t rate) {
-	return (((uint16_t)dsp->counter + OFFS_TABLE[rate]) % RATES_TABLE[rate]) == 0;
+	return (((uint16_t)dsp->counter + DSP_OFFS[rate]) % DSP_RATES[rate]) == 0;
 }
 
 static inline int32_t clamp16(int32_t val) {
@@ -78,7 +78,7 @@ static inline int32_t clamp16(int32_t val) {
 }
 
 void dsp_init(DSP *dsp, uint8_t *ram) {
-	(void)GAUSS_TABLE; // shut up gcc
+	(void)DSP_GAUSS; // shut up gcc
 
 	memset(dsp, 0, sizeof(DSP));
 	dsp->ram = ram;
@@ -151,10 +151,10 @@ static inline int16_t dsp_interpolate_gauss(int32_t interp_pos, const int16_t *s
 	uint8_t offset = (interp_pos >> 4) & 0xff;
 
 	int32_t out = (int16_t)(
-		((GAUSS_TABLE[255 - offset] * (int32_t)samples[pos % 12]) >> 11) +
-		((GAUSS_TABLE[511 - offset] * (int32_t)samples[(pos + 1) % 12]) >> 11) +
-		((GAUSS_TABLE[256 + offset] * (int32_t)samples[(pos + 2) % 12]) >> 11)
-	) + ((GAUSS_TABLE[offset] * (int32_t)samples[(pos + 3) % 12]) >> 11);
+		((DSP_GAUSS[255 - offset] * (int32_t)samples[pos % 12]) >> 11) +
+		((DSP_GAUSS[511 - offset] * (int32_t)samples[(pos + 1) % 12]) >> 11) +
+		((DSP_GAUSS[256 + offset] * (int32_t)samples[(pos + 2) % 12]) >> 11)
+	) + ((DSP_GAUSS[offset] * (int32_t)samples[(pos + 3) % 12]) >> 11);
 
 	return clamp16(out) & ~0x01;
 }

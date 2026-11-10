@@ -5,28 +5,12 @@
 
 #include "bus.h"
 
+#define lhstruct(vname, hlen) union { uint16_t vname; struct { uint8_t vname##l : 8; uint8_t vname##h : hlen; }; }
+
 typedef struct CPU {
-	union {
-		uint16_t a;
-		struct {
-			uint8_t al;
-			uint8_t ah;
-		};
-	};
-	union {
-		uint16_t x;
-		struct {
-			uint8_t xl;
-			uint8_t xh;
-		};
-	};
-	union {
-		uint16_t y;
-		struct {
-			uint8_t yl;
-			uint8_t yh;
-		};
-	};
+	lhstruct(a, 8);
+	lhstruct(x, 8);
+	lhstruct(y, 8);
 
 	union {
 		uint32_t pcf : 24;
@@ -83,3 +67,6 @@ void cpu_reset(CPU *cpu);
 
 void cpu_run(CPU *cpu);
 void cpu_step(CPU *cpu);
+
+uint8_t cpu_read(CPU *cpu, uint32_t addr);
+void cpu_write(CPU *cpu, uint32_t addr, uint8_t val);

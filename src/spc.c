@@ -213,17 +213,17 @@ void spc_push16(SPC *spc, uint16_t val) {
 }
 
 void spc_set_zn(SPC *spc, uint8_t val) {
-	spc->p.z = (val == 0);
-	spc->p.n = (val & 0x80) != 0;
+	spc->psw.z = (val == 0);
+	spc->psw.n = (val & 0x80) != 0;
 }
 
 void spc_set_zn16(SPC *spc, uint16_t val) {
-	spc->p.z = (val == 0);
-	spc->p.n = (val & 0x8000) != 0;
+	spc->psw.z = (val == 0);
+	spc->psw.n = (val & 0x8000) != 0;
 }
 
 uint16_t spc_oper_addr(SPC *spc, AddrMode mode) {
-	uint16_t dp_base = spc->p.p ? 0x0100 : 0x0000;
+	uint16_t dp_base = spc->psw.p ? 0x0100 : 0x0000;
 	uint8_t op8;
 	uint16_t op16;
 	int8_t offs;
@@ -327,11 +327,11 @@ void spc_branch(SPC *spc, bool condition, uint16_t addr) {
 }
 
 uint8_t spc_op_adc(SPC *spc, uint8_t a, uint8_t b) {
-	int result = a + b + spc->p.c;
+	int result = a + b + spc->psw.c;
 
-	spc->p.v = ((~(a ^ b) & (a ^ result) & 0x80)) != 0;
-	spc->p.h = (((a & 0x0f) + (b & 0x0f) + spc->p.c) > 0x0f) != 0;
-	spc->p.c = (result > 0xff) != 0;
+	spc->psw.v = ((~(a ^ b) & (a ^ result) & 0x80)) != 0;
+	spc->psw.h = (((a & 0x0f) + (b & 0x0f) + spc->psw.c) > 0x0f) != 0;
+	spc->psw.c = (result > 0xff) != 0;
 
 	uint8_t res8 = (uint8_t)result;
 	spc_set_zn(spc, res8);
@@ -341,9 +341,9 @@ uint8_t spc_op_adc(SPC *spc, uint8_t a, uint8_t b) {
 uint16_t spc_op_addw(SPC *spc, uint16_t a, uint16_t b) {
 	uint32_t result = a + b;
 
-	spc->p.v = ((~(a ^ b) & (a ^ result) & 0x8000)) != 0;
-	spc->p.h = (((a & 0x0fff) + (b & 0x0fff)) > 0x0fff) != 0;
-	spc->p.c = (result > 0xffff) != 0;
+	spc->psw.v = ((~(a ^ b) & (a ^ result) & 0x8000)) != 0;
+	spc->psw.h = (((a & 0x0fff) + (b & 0x0fff)) > 0x0fff) != 0;
+	spc->psw.c = (result > 0xffff) != 0;
 
 	uint16_t res16 = (uint16_t)result;
 	spc_set_zn16(spc, res16);
@@ -357,11 +357,11 @@ uint8_t spc_op_and(SPC *spc, uint8_t a, uint8_t b) {
 }
 
 void spc_op_and1(SPC *spc, uint8_t bit) {
-	spc->p.c &= bit;
+	spc->psw.c &= bit;
 }
 
 uint8_t spc_op_asl(SPC *spc, uint8_t val) {
-	spc->p.c = (val & 0x80) != 0;
+	spc->psw.c = (val & 0x80) != 0;
 	val <<= 1;
 	spc_set_zn(spc, val);
 	return val;
@@ -369,9 +369,9 @@ uint8_t spc_op_asl(SPC *spc, uint8_t val) {
 
 void spc_op_brk(SPC *spc) {
 	spc_push16(spc, spc->pc);
-	spc_push(spc, spc->p.raw);
-	spc->p.b = 1;
-	spc->p.i = 0;
+	spc_push(spc, spc->psw.raw);
+	spc->psw.b = 1;
+	spc->psw.i = 0;
 	spc_op_jmp(spc, spc_read16(spc, 0xffde));
 }
 
@@ -381,38 +381,38 @@ void spc_op_call(SPC *spc, uint16_t addr) {
 }
 
 void spc_op_cmp(SPC *spc, uint8_t a, uint8_t b) {
-	spc->p.c = (a >= b);
+	spc->psw.c = (a >= b);
 	spc_set_zn(spc, a - b);
 }
 
 void spc_op_cmpw(SPC *spc, uint16_t a, uint16_t b) {
-	spc->p.c = (a >= b);
+	spc->psw.c = (a >= b);
 	spc_set_zn16(spc, a - b);
 }
 
 void spc_op_daa(SPC *spc) {
 	uint8_t src = spc->a;
-	if (((src & 0x0f) > 9) || spc->p.h) {
+	if (((src & 0x0f) > 9) || spc->psw.h) {
 		spc->a += 6;
 		if (spc->a < 6) {
-			spc->p.c = 1;
+			spc->psw.c = 1;
 		}
 	}
-	if ((src > 0x99) || spc->p.c) {
+	if ((src > 0x99) || spc->psw.c) {
 		spc->a += 0x60;
-		spc->p.c = 1;
+		spc->psw.c = 1;
 	}
 	spc_set_zn(spc, spc->a);
 }
 
 void spc_op_das(SPC *spc) {
 	uint8_t src = spc->a;
-	if (!spc->p.h || ((src & 0x0f) > 9)) {
+	if (!spc->psw.h || ((src & 0x0f) > 9)) {
 		spc->a -= 6;
 	}
-	if (!spc->p.c || (src > 0x99)) {
+	if (!spc->psw.c || (src > 0x99)) {
 		spc->a -= 0x60;
-		spc->p.c = 0;
+		spc->psw.c = 0;
 	}
 	spc_set_zn(spc, spc->a);
 }
@@ -432,14 +432,14 @@ uint16_t spc_op_decw(SPC *spc, uint16_t val) {
 void spc_op_div(SPC *spc) {
 	uint32_t ya = spc->ya;
 	uint32_t x = (uint32_t)spc->x << 9;
-	spc->p.h = ((spc->y & 0x0f) >= (spc->x & 0x0f));
+	spc->psw.h = ((spc->y & 0x0f) >= (spc->x & 0x0f));
 	for (int i = 0; i < 9; i++) {
 		ya <<= 1;
 		if (ya & 0x20000) ya = (ya & 0x1ffff) | 1;
 		if (ya >= x) ya ^= 1;
 		if (ya & 1) ya = (ya - x) & 0x1ffff;
 	}
-	spc->p.v = (ya & 0x100) != 0;
+	spc->psw.v = (ya & 0x100) != 0;
 	spc->a = ya & 0xff;
 	spc->y = (ya >> 9) & 0xff;
 	spc_set_zn(spc, spc->a);
@@ -452,7 +452,7 @@ uint8_t spc_op_eor(SPC *spc, uint8_t a, uint8_t b) {
 }
 
 void spc_op_eor1(SPC *spc, uint8_t bit) {
-	spc->p.c ^= bit;
+	spc->psw.c ^= bit;
 }
 
 uint8_t spc_op_inc(SPC *spc, uint8_t val) {
@@ -472,7 +472,7 @@ void spc_op_jmp(SPC *spc, uint16_t addr) {
 }
 
 uint8_t spc_op_lsr(SPC *spc, uint8_t val) {
-	spc->p.c = (val & 0x01) != 0;
+	spc->psw.c = (val & 0x01) != 0;
 	val >>= 1;
 	spc_set_zn(spc, val);
 	return val;
@@ -484,8 +484,8 @@ uint8_t spc_op_mov(SPC *spc, uint8_t val) {
 }
 
 uint8_t spc_op_mov1(SPC *spc, uint8_t val, uint8_t bit) {
-	if (spc->p.c) return val | (1 << bit);
-	else          return val & ~(1 << bit);
+	if (spc->psw.c) return val | (1 << bit);
+	else            return val & ~(1 << bit);
 }
 
 uint8_t spc_op_mov_nf(SPC *spc, uint8_t val) {
@@ -504,8 +504,8 @@ uint16_t spc_op_movw_nf(SPC *spc, uint16_t val) {
 }
 
 void spc_op_mul(SPC *spc) {
-    spc->ya = (uint16_t)spc->y * (uint16_t)spc->a;
-    spc_set_zn(spc, spc->y); // N and Z are set based on Y only
+	spc->ya = (uint16_t)spc->y * (uint16_t)spc->a;
+	spc_set_zn(spc, spc->y);
 }
 
 uint8_t spc_op_not1(SPC *spc, uint8_t val, uint8_t bit) {
@@ -520,31 +520,31 @@ uint8_t spc_op_or(SPC *spc, uint8_t a, uint8_t b) {
 }
 
 void spc_op_or1(SPC *spc, uint8_t bit) {
-	spc->p.c |= bit;
+	spc->psw.c |= bit;
 }
 
 uint8_t spc_op_rol(SPC *spc, uint8_t val) {
-	uint8_t old_c = spc->p.c;
-	spc->p.c = (val & 0x80) != 0;
+	uint8_t old_c = spc->psw.c;
+	spc->psw.c = (val & 0x80) != 0;
 	val = (val << 1) | old_c;
 	spc_set_zn(spc, val);
 	return val;
 }
 
 uint8_t spc_op_ror(SPC *spc, uint8_t val) {
-	uint8_t old_c = spc->p.c;
-	spc->p.c = (val & 0x01) != 0;
+	uint8_t old_c = spc->psw.c;
+	spc->psw.c = (val & 0x01) != 0;
 	val = (val >> 1) | (old_c << 7);
 	spc_set_zn(spc, val);
 	return val;
 }
 
 uint8_t spc_op_sbc(SPC *spc, uint8_t a, uint8_t b) {
-	int result = a - b - !spc->p.c;
+	int result = a - b - !spc->psw.c;
 
-	spc->p.v = (((a ^ b) & (a ^ result) & 0x80)) != 0;
-	spc->p.h = (((a & 0x0f) - (b & 0x0f) - !spc->p.c) >= 0);
-	spc->p.c = (result >= 0);
+	spc->psw.v = (((a ^ b) & (a ^ result) & 0x80)) != 0;
+	spc->psw.h = (((a & 0x0f) - (b & 0x0f) - !spc->psw.c) >= 0);
+	spc->psw.c = (result >= 0);
 
 	uint8_t res8 = (uint8_t)result;
 	spc_set_zn(spc, res8);
@@ -554,9 +554,9 @@ uint8_t spc_op_sbc(SPC *spc, uint8_t a, uint8_t b) {
 uint16_t spc_op_subw(SPC *spc, uint16_t a, uint16_t b) {
 	int32_t result = (int32_t)a - (int32_t)b;
 
-	spc->p.v = (((a ^ b) & (a ^ result) & 0x8000)) != 0;
-	spc->p.h = (((int)(a & 0x0fff) - (int)(b & 0x0fff)) >= 0);
-	spc->p.c = (result >= 0);
+	spc->psw.v = (((a ^ b) & (a ^ result) & 0x8000)) != 0;
+	spc->psw.h = (((int)(a & 0x0fff) - (int)(b & 0x0fff)) >= 0);
+	spc->psw.c = (result >= 0);
 
 	uint16_t res16 = (uint16_t)result;
 	spc_set_zn16(spc, res16);
@@ -695,7 +695,7 @@ void spc_op_switch(SPC *spc, uint8_t opcode) {
 			break;
 
 		case 0xaa:
-			spc->p.c = (spc_read(spc, addr) >> spc->oper_addr_ex) & 1;
+			spc->psw.c = (spc_read(spc, addr) >> spc->oper_addr_ex) & 1;
 			break;
 
 		case 0xca:
@@ -708,7 +708,7 @@ void spc_op_switch(SPC *spc, uint8_t opcode) {
 
 		// branches
 		case 0x10:
-			spc_branch(spc, !spc->p.n, addr);
+			spc_branch(spc, !spc->psw.n, addr);
 			break;
 
 		case 0x2f:
@@ -716,31 +716,31 @@ void spc_op_switch(SPC *spc, uint8_t opcode) {
 			break;
 
 		case 0x30:
-			spc_branch(spc, spc->p.n, addr);
+			spc_branch(spc, spc->psw.n, addr);
 			break;
 
 		case 0x50:
-			spc_branch(spc, !spc->p.v, addr);
+			spc_branch(spc, !spc->psw.v, addr);
 			break;
 
 		case 0x70:
-			spc_branch(spc, spc->p.v, addr);
+			spc_branch(spc, spc->psw.v, addr);
 			break;
 
 		case 0x90:
-			spc_branch(spc, !spc->p.c, addr);
+			spc_branch(spc, !spc->psw.c, addr);
 			break;
 
 		case 0xb0:
-			spc_branch(spc, spc->p.c, addr);
+			spc_branch(spc, spc->psw.c, addr);
 			break;
 
 		case 0xd0:
-			spc_branch(spc, !spc->p.z, addr);
+			spc_branch(spc, !spc->psw.z, addr);
 			break;
 
 		case 0xf0:
-			spc_branch(spc, spc->p.z, addr);
+			spc_branch(spc, spc->psw.z, addr);
 			break;
 
 		// call
@@ -898,36 +898,36 @@ void spc_op_switch(SPC *spc, uint8_t opcode) {
 
 		// flags
 		case 0x20:
-			spc->p.p = 0;
+			spc->psw.p = 0;
 			break;
 
 		case 0x40:
-			spc->p.p = 1;
+			spc->psw.p = 1;
 			break;
 
 		case 0x60:
-			spc->p.c = 0;
+			spc->psw.c = 0;
 			break;
 
 		case 0x80:
-			spc->p.c = 1;
+			spc->psw.c = 1;
 			break;
 
 		case 0xed:
-			spc->p.c = !spc->p.c;
+			spc->psw.c = !spc->psw.c;
 			break;
 
 		case 0xe0:
-			spc->p.v = 0;
-			spc->p.h = 0;
+			spc->psw.v = 0;
+			spc->psw.h = 0;
 			break;
 
 		case 0xa0:
-			spc->p.i = 1;
+			spc->psw.i = 1;
 			break;
 
 		case 0xc0:
-			spc->p.i = 0;
+			spc->psw.i = 0;
 			break;
 
 		// inc
@@ -1090,7 +1090,7 @@ void spc_op_switch(SPC *spc, uint8_t opcode) {
 
 		// pop
 		case 0x8e:
-			spc->p.raw = spc_pull(spc);
+			spc->psw.raw = spc_pull(spc);
 			break;
 
 		case 0xae:
@@ -1107,7 +1107,7 @@ void spc_op_switch(SPC *spc, uint8_t opcode) {
 
 		// push
 		case 0x0d:
-			spc_push(spc, spc->p.raw);
+			spc_push(spc, spc->psw.raw);
 			break;
 
 		case 0x2d:
@@ -1124,7 +1124,7 @@ void spc_op_switch(SPC *spc, uint8_t opcode) {
 
 		// ret
 		case 0x7f:
-			spc->p.raw = spc_pull(spc);
+			spc->psw.raw = spc_pull(spc);
 			// fallthrough
 		case 0x6f:
 			spc->pc = spc_pull16(spc);

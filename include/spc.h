@@ -30,7 +30,7 @@ typedef struct SPC {
 			uint8_t v : 1;
 			uint8_t n : 1;
 		};
-	} p;
+	} psw;
 
 	union {
 		uint8_t raw;

@@ -9,6 +9,8 @@
 typedef struct CPU CPU;
 typedef struct PPU PPU;
 
+#define lhstruct(vname, hlen) union { uint16_t vname; struct { uint8_t vname##l : 8; uint8_t vname##h : hlen; }; }
+
 typedef struct Bus {
 	uint8_t wram[128 << 10];
 
@@ -51,19 +53,37 @@ typedef struct Bus {
 			bool timer_flag : 1;
 		};
 	};
+	lhstruct(htime, 1);
+	lhstruct(vtime, 1);
+
+	bool joy_strobe;
+	lhstruct(joy1, 8);
+	uint16_t joy1_shift;
+
 	union {
-		uint16_t htime;
+		uint8_t dmaregs[0x80];
 		struct {
-			uint8_t htimel : 8;
-			uint8_t htimeh : 1;
-		};
-	};
-	union {
-		uint16_t vtime;
-		struct {
-			uint8_t vtimel : 8;
-			uint8_t vtimeh : 1;
-		};
+			union {
+				uint8_t dmap;
+				struct {
+					uint8_t mode : 3;
+					uint8_t fixed : 1;
+					uint8_t decrement : 1;
+					uint8_t : 1;
+					uint8_t hdma_ind : 1;
+					uint8_t invert : 1;
+				};
+			};
+			uint8_t bbad;
+			lhstruct(a1t, 8);
+			uint8_t a1b;
+			lhstruct(das, 8);
+			uint8_t dasb;
+			lhstruct(a2a, 8);
+			uint8_t ntrl;
+			uint8_t scratch;
+			uint8_t pad[4];
+		} __attribute__((packed)) dmachan[8];
 	};
 } Bus;
 
