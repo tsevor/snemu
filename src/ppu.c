@@ -20,7 +20,6 @@ static const uint8_t PPU_BG_BPP[8][4] = {
 	{ 8, 7, 0, 0 },
 };
 
-
 static const uint8_t SPRITE_PRIO[8][4] = {
 	{ 3, 6, 9, 12 },
 	{ 2, 4, 7, 10 },
@@ -29,10 +28,10 @@ static const uint8_t SPRITE_PRIO[8][4] = {
 };
 
 static const uint8_t BG_PRIO[8][4][2] = {
-	{ {8, 11}, {7, 10}, {2, 5}, {1,  4} },
-	{ {6,  9}, {5,  8}, {1, 3}, {1, 11} }, // mode1 bg3 prio uses bg4 entry
-	{ {3,  7}, {1,  5}, {0, 0}, {0,  0} },
-	{ {3,  7}, {1,  5}, {0, 0}, {0,  0} },
+	{ { 8, 11 }, { 7, 10 }, { 2, 5 }, { 1,  4 } },
+	{ { 6,  9 }, { 5,  8 }, { 1, 3 }, { 1, 11 } }, // mode1 bg3 prio uses bg4 entry
+	{ { 3,  7 }, { 1,  5 }, { 0, 0 }, { 0,  0 } },
+	{ { 3,  7 }, { 1,  5 }, { 0, 0 }, { 0,  0 } },
 };
 
 uint16_t vram_effective_addr(uint16_t addr, uint8_t remap) {
@@ -46,17 +45,19 @@ uint16_t vram_effective_addr(uint16_t addr, uint8_t remap) {
 }
 
 void ppu_init(PPU *ppu) {
-	ppu->frame_count = 0;
-	ppu->scanline = 0;
-	ppu->dot = 0;
+	ppu_poweron(ppu);
 }
 
 void ppu_poweron(PPU *ppu) {
-	ppu_init(ppu);
+	ppu_reset(ppu);
 }
 
 void ppu_reset(PPU *ppu) {
-	ppu_init(ppu);
+	ppu->frame_count = 0;
+	ppu->scanline = 0;
+	ppu->dot = 0;
+
+	ppu->forced_blank = true;
 }
 
 uint8_t ppu_bus_read(PPU *ppu, uint32_t addr) {
@@ -296,7 +297,7 @@ void ppu_eval_sprites(PPU *ppu) {
 		uint8_t ht_shift = (i & 3) << 1;
 		uint8_t ht_bits = ppu->sprites.ht[ht_addr] >> ht_shift & 3;
 		uint8_t size = PPU_OBJ_SIZES[ppu->s_size_sel][ht_bits >> 1];
-		int16_t spr_y = ppu->sprites.lt[i].y_pos + 1; // one scanline delay
+		int16_t spr_y = ppu->sprites.lt[i].y_pos;
 		uint8_t row = (sy - spr_y) & 0xff; // allow wrapping to top
 		if (row < size) {
 			ppu->line_sprites[ppu->line_sprites_count++] = i;
@@ -359,7 +360,7 @@ void ppu_render_dot(PPU *ppu) {
 			int16_t spr_x = ppu->sprites.lt[s].x_pos;
 			if (ht_bits & 1) spr_x -= 256;
 			if (sx < spr_x || sx >= spr_x + size) continue;
-			int16_t spr_y = ppu->sprites.lt[s].y_pos + 1; // one scanline delay
+			int16_t spr_y = ppu->sprites.lt[s].y_pos;
 
 			uint8_t px = sx - spr_x;
 			uint8_t py = sy - spr_y;
@@ -419,7 +420,7 @@ void ppu_render_dot(PPU *ppu) {
 		if (((ppu->main_screen_en >> bg) & 1) == 0 && ((ppu->sub_screen_en >> bg) & 1) == 0) continue;
 
 		int px = (sx + ppu->bg[bg].h_scroll) & 0x3ff;
-		int py = (sy + ppu->bg[bg].v_scroll) & 0x3ff;
+		int py = (ppu->scanline + ppu->bg[bg].v_scroll) & 0x3ff;
 
 		int tx = px / 8;
 		int ty = py / 8;
@@ -489,7 +490,7 @@ void ppu_render_dot(PPU *ppu) {
 				uint8_t bp6 = (ppu->vram[chr + 48 + tile_py * 2] >> bit) & 1;
 				uint8_t bp7 = (ppu->vram[chr + 48 + tile_py * 2 + 1] >> bit) & 1;
 				uint8_t color_idx = bp0 | (bp1<<1) | (bp2<<2) | (bp3<<3) | (bp4<<4) | (bp5<<5) | (bp6<<6) | (bp7<<7);
-        		if (color_idx != 0) {
+				if (color_idx != 0) {
 					uint8_t cgram_idx = (pal_num) + color_idx;
 					bg_col = ppu->cgram[cgram_idx];
 				}

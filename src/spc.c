@@ -1237,6 +1237,10 @@ void spc_reset(SPC *spc) {
 		spc->timers[i].stage = 0;
 		spc->timers[i].count = 0;
 	}
+	for (int i = 0; i < 4; i++) {
+		spc->port_in[i] = 0;
+		spc->port_out[i] = 0;
+	}
 
 	dsp_reset(&spc->dsp);
 

@@ -1765,14 +1765,16 @@ void cpu_reset(CPU *cpu) {
 	cpu->p.raw = 0b00110100;
 	cpu->d = 0;
 	cpu->db = 0;
-	cpu->pb = 0;
 	cpu->e = true;
-	cpu->s = 0x01ff;
+	cpu->sh = 0x01;
+	cpu->xh = 0;
+	cpu->yh = 0;
 	cpu->stopped = false;
 	cpu->waiting = false;
 	cpu->nmi_pending = false;
 	cpu->irq_pending = false;
-	cpu_interrupt(cpu, INT_RESET);
+	cpu->pb = 0;
+	cpu->pc = bus_read(cpu->bus, 0xfffc) | (bus_read(cpu->bus, 0xfffd) << 8);
 }
 
 void cpu_step(CPU *cpu) {

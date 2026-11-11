@@ -43,13 +43,21 @@ void bus_poweron(Bus *bus) {
 }
 
 void bus_reset(Bus *bus) {
-	cpu_reset(bus->cpu);
 	spc_reset(bus->spc);
 	ppu_reset(bus->ppu);
 	bus->nmitimen = 0;
 	bus->rdnmi = 0;
 	bus->timeup = 0;
 	bus->vblank_started = false;
+	bus->vblank_flag = false;
+	bus->timer_flag = false;
+	bus->hdmaen = 0;
+	bus->hdma_active = 0;
+	bus->hdma_stopped = 0;
+	bus->spc_cycle_acc = 0;
+	bus->ppu_cycle_acc = 0;
+
+	cpu_reset(bus->cpu);
 }
 
 void bus_next_fast(Bus *bus) {
@@ -58,6 +66,11 @@ void bus_next_fast(Bus *bus) {
 
 void bus_clock(Bus *bus) {
 	// clock components
+
+	// TODO: fix cpu timing accuracy
+	// lag is coming from nowhere, and until i make the
+	// cpu accurate, i just have to let it run faster
+	bus->last_wr_cycles -= 1;
 	bus->cycles += bus->last_wr_cycles;
 
 	// if apu is behind, exec one instruction
@@ -145,7 +158,6 @@ void bus_exec_hdma(Bus *bus) {
 	}
 }
 
-
 static void bus_init_hdma_channel(Bus *bus, int ch) {
 	bus->dmachan[ch].a2a = bus->dmachan[ch].a1t;
 	uint32_t table_addr = (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++;
@@ -175,16 +187,12 @@ void bus_init_hdma(Bus *bus) {
 	}
 }
 
-
 void bus_trigger_vblank(Bus *bus) {
 	bus->vblank_flag = true;
 	bus->vblank_started = true;
 
 	if (bus->vblank_nmi_en) {
 		bus->cpu->nmi_pending = true;
-	}
-	if (bus->autojoy) {
-		bus->joy1 = host_get_controller();
 	}
 }
 
@@ -259,9 +267,9 @@ static uint8_t bus_read_cpu_io(Bus *bus, uint16_t addr) {
 		case 0x4217: // rdmpyh
 			return bus->rdmpyh;
 		case 0x4218: // controller 1 low
-			return bus->joy1l;
+			return host_get_controller() & 0xff;
 		case 0x4219: // controller 1 high
-			return bus->joy1h;
+			return host_get_controller() >> 8;
 		case 0x421a ... 0x421b: // controller 2
 			return 0;
 		case 0x4300 ... 0x430c:

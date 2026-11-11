@@ -57,7 +57,6 @@ typedef struct Bus {
 	lhstruct(vtime, 1);
 
 	bool joy_strobe;
-	lhstruct(joy1, 8);
 	uint16_t joy1_shift;
 
 	union {

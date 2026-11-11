@@ -9,10 +9,6 @@
 
 #include <SDL3/SDL.h>
 
-// in some modes, ppu can have double res
-
-#define PIXEL_SCALE 2
-
 #define MAX_EVENTS 16
 
 uint32_t *host_screen_buffer = NULL;

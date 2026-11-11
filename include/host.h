@@ -7,8 +7,11 @@
 // everything in here should be a blind interface
 
 // TODO: double these without performance hit
+// because in some modes, output can have double res
+
 #define SNES_WIDTH 256
 #define SNES_HEIGHT 224
+#define PIXEL_SCALE 2
 
 typedef enum ControllerButton {
 	BUTTON_B      = 0x8000,

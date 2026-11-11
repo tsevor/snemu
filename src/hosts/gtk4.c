@@ -6,8 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SNES_WIDTH 512
-#define SNES_HEIGHT 448
 #define MAX_EVENTS 16
 
 uint32_t *host_screen_buffer = NULL;
