@@ -8,7 +8,7 @@
 #include "log.h"
 #include "host.h"
 
-#define _DONT_SAVE_SRAM_FILE
+// #define _DONT_SAVE_SRAM_FILE
 
 int header_score(uint8_t *rom, uint32_t addr, uint32_t rom_size) {
 	// thanks mesen for the code
