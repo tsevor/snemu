@@ -17,6 +17,17 @@ typedef union Color15 {
 	};
 } Color15;
 
+
+typedef struct BGLayer {
+	uint16_t tilemap_addr;
+	uint16_t chr_addr;
+	uint16_t h_scroll;
+	uint16_t v_scroll;
+	bool double_width;
+	bool double_height;
+	bool large_tiles;
+} BGLayer;
+
 typedef struct PPU {
 	Bus *bus;
 
@@ -75,6 +86,24 @@ typedef struct PPU {
 		};
 	} vmain;
 	uint8_t vmain_inc;
+
+	BGLayer bg[4];
+	uint8_t bg_mode;
+	bool mode1_bg3_prio;
+	uint8_t scroll_latch;
+	uint8_t main_screen_en;
+
+	uint8_t sub_screen_en;
+	uint8_t cgwsel;
+	uint8_t cgadsub;
+	Color15 fixed_color;
+
+	int16_t m7a;
+	int16_t m7b;
+	uint8_t m7_latch;
+
+	bool forced_blank;
+	uint8_t brightness;
 
 	uint32_t frame_count;
 	int scanline;

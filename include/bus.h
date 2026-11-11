@@ -85,6 +85,18 @@ typedef struct Bus {
 			uint8_t pad[4];
 		} __attribute__((packed)) dmachan[8];
 	};
+
+	uint8_t hdmaen;
+	uint8_t hdma_active;
+	uint8_t hdma_stopped;
+	bool hdma_do_transfer[8];
+
+	uint8_t wrmpya;
+	lhstruct(rdmpy, 8);
+	lhstruct(rddiv, 8);
+	lhstruct(wrdiv, 8);
+
+	uint32_t wram_addr;
 } Bus;
 
 void bus_init(Bus *bus);
@@ -101,6 +113,9 @@ void bus_write(Bus *bus, uint32_t addr, uint8_t val);
 void bus_trigger_vblank(Bus *bus);
 void bus_clear_vblank(Bus *bus);
 void bus_check_irq(Bus *bus);
+
+void bus_init_hdma(Bus *bus);
+void bus_exec_hdma(Bus *bus);
 
 #include "cpu.h"
 #include "ppu.h"

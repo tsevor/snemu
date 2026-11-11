@@ -5,6 +5,7 @@
 #include "cpu.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
 static const uint8_t DMA_OFFS[8][4] = {
@@ -17,6 +18,8 @@ static const uint8_t DMA_OFFS[8][4] = {
 	{0, 0, 0, 0},
 	{0, 0, 1, 1},
 };
+
+static const uint8_t HDMA_BYTES[8] = { 1, 2, 2, 4, 4, 4, 2, 4 };
 
 void bus_init(Bus *bus) {
 	(void)DMA_OFFS;
@@ -87,6 +90,92 @@ void bus_exec_dma(Bus *bus, int ch) {
 	}
 }
 
+void bus_exec_hdma(Bus *bus) {
+	uint8_t active = bus->hdma_active & bus->hdmaen & ~bus->hdma_stopped;
+	if (!active) return;
+
+	for (int ch = 0; ch < 8; ch++) {
+		if (!(active & (1 << ch))) continue;
+		if (!bus->hdma_do_transfer[ch]) continue;
+
+		uint8_t bytes = HDMA_BYTES[bus->dmachan[ch].mode];
+		for (int i = 0; i < bytes; i++) {
+			uint16_t b_addr = 0x2100 | (bus->dmachan[ch].bbad + DMA_OFFS[bus->dmachan[ch].mode][i]);
+			uint32_t a_addr;
+
+			if (bus->dmachan[ch].hdma_ind) {
+				a_addr = (bus->dmachan[ch].dasb << 16) | bus->dmachan[ch].das++;
+			} else {
+				a_addr = (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++;
+			}
+
+			if (bus->dmachan[ch].invert) {
+				bus_write(bus, a_addr, bus_read(bus, b_addr));
+			} else {
+				bus_write(bus, b_addr, bus_read(bus, a_addr));
+			}
+		}
+	}
+
+	for (int ch = 0; ch < 8; ch++) {
+		if (!(active & (1 << ch))) continue;
+
+		bus->dmachan[ch].ntrl--;
+		bus->hdma_do_transfer[ch] = (bus->dmachan[ch].ntrl & 0x80) != 0; // repeat mode
+
+		if ((bus->dmachan[ch].ntrl & 0x7f) == 0) {
+			uint32_t table_addr = (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++;
+			bus->dmachan[ch].ntrl = bus_read(bus, table_addr);
+
+			if (bus->dmachan[ch].ntrl == 0) {
+				bus->hdma_stopped |= (1 << ch); // end of table
+				continue;
+			}
+
+			if (bus->dmachan[ch].hdma_ind) {
+				uint8_t lsb = bus_read(bus, (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++);
+				uint8_t msb = bus_read(bus, (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++);
+				bus->dmachan[ch].das = (msb << 8) | lsb;
+			}
+
+			bus->hdma_do_transfer[ch] = true;
+		}
+	}
+}
+
+void bus_init_hdma(Bus *bus) {
+	bus->hdma_active = bus->hdmaen;
+	bus->hdma_stopped = 0;
+	for (int ch = 0; ch < 8; ch++) {
+		bus->hdma_do_transfer[ch] = false;
+	}
+
+	if (!bus->hdma_active) return;
+
+	for (int ch = 0; ch < 8; ch++) {
+		if (!(bus->hdma_active & (1 << ch))) continue;
+
+		bus->dmachan[ch].a2a = bus->dmachan[ch].a1t;
+
+		uint32_t table_addr = (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++;
+		bus->dmachan[ch].ntrl = bus_read(bus, table_addr);
+
+		if (bus->dmachan[ch].ntrl == 0) {
+			bus->hdma_stopped |= (1 << ch);
+			continue;
+		}
+
+		if (bus->dmachan[ch].hdma_ind) {
+			uint8_t lsb = bus_read(bus, (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++);
+			uint8_t msb = bus_read(bus, (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++);
+			bus->dmachan[ch].das = (msb << 8) | lsb;
+		}
+
+		bus->hdma_do_transfer[ch] = true;
+	}
+}
+
+
 void bus_trigger_vblank(Bus *bus) {
 	bus->vblank_flag = true;
 	bus->vblank_started = true;
@@ -134,6 +223,10 @@ void bus_check_irq(Bus *bus) {
 static uint8_t bus_read_cpu_io(Bus *bus, uint16_t addr) {
 	uint8_t res;
 	switch (addr) {
+		case 0x2180: // wmdata
+			res = bus->wram[bus->wram_addr];
+			bus->wram_addr = (bus->wram_addr + 1) & 0x1ffff;
+			return res;
 		case 0x4016: // legacy controller 1
 			res = bus->joy1_shift >> 15;
 			if (!bus->joy_strobe) {
@@ -154,6 +247,14 @@ static uint8_t bus_read_cpu_io(Bus *bus, uint16_t addr) {
 			return res;
 		case 0x4212: // auto-poll done
 			return bus->open_bus & ~1;
+		case 0x4214: // rddivl
+			return bus->rddivl;
+		case 0x4215: // rddivh
+			return bus->rddivh;
+		case 0x4216: // rdmpyl
+			return bus->rdmpyl;
+		case 0x4217: // rdmpyh
+			return bus->rdmpyh;
 		case 0x4218: // controller 1 low
 			return bus->joy1l;
 		case 0x4219: // controller 1 high
@@ -185,6 +286,19 @@ static uint8_t bus_read_cpu_io(Bus *bus, uint16_t addr) {
 
 static void bus_write_cpu_io(Bus *bus, uint16_t addr, uint8_t val) {
 	switch (addr) {
+		case 0x2180: // wmdata
+			bus->wram[bus->wram_addr] = val;
+			bus->wram_addr = (bus->wram_addr + 1) & 0x1ffff;
+			break;
+		case 0x2181: // wmaddl
+			bus->wram_addr = (bus->wram_addr & 0x1ff00) | val;
+			break;
+		case 0x2182: // wmaddm
+			bus->wram_addr = (bus->wram_addr & 0x100ff) | (val << 8);
+			break;
+		case 0x2183: // wmaddh
+			bus->wram_addr = (bus->wram_addr & 0x0ffff) | ((val & 1) << 16);
+			break;
 		case 0x4016: // legacy controller 1
 			if (val & 1) {
 				bus->joy_strobe = true;
@@ -205,6 +319,28 @@ static void bus_write_cpu_io(Bus *bus, uint16_t addr, uint8_t val) {
 			}
 			break;
 		}
+		case 0x4202: // wrmpya
+			bus->wrmpya = val;
+			break;
+		case 0x4203: // wrmpyb
+			bus->rddiv = (val << 8) | bus->wrmpya;
+			bus->rdmpy = (uint16_t)bus->wrmpya * val;
+			break;
+		case 0x4204: // wrdivl
+			bus->wrdivl = val;
+			break;
+		case 0x4205: // wrdivh
+			bus->wrdivh = val;
+			break;
+		case 0x4206:
+			if (val == 0) { // div by 0
+				bus->rddiv = 0xffff;
+				bus->rdmpy = bus->wrdiv;
+			} else {
+				bus->rddiv = bus->wrdiv / val;
+				bus->rdmpy = bus->wrdiv % val;
+			}
+			break;
 		case 0x4207: // htimel
 			bus->htimel = val;
 			break;
@@ -215,12 +351,15 @@ static void bus_write_cpu_io(Bus *bus, uint16_t addr, uint8_t val) {
 			bus->vtimel = val;
 			break;
 		case 0x420a: // vtimeh
-			bus->vtime = val & 1;
+			bus->vtimeh = val & 1;
 			break;
 		case 0x420b:
 			for (int ch = 0; ch < 8; ch++) {
 				if (val & (1 << ch)) bus_exec_dma(bus, ch);
 			}
+			break;
+		case 0x420c: // hdmaen
+			bus->hdmaen = val;
 			break;
 		case 0x4300 ... 0x430a:
 		case 0x4310 ... 0x431a:
@@ -262,6 +401,7 @@ uint8_t bus_read(Bus *bus, uint32_t addr) {
 			case 0x2140 ... 0x217f: // spc mmio
 				bus->open_bus = spc_read_io_port(bus->spc, offset & 3);
 				break;
+			case 0x2180 ... 0x2183: // wram mmio
 			case 0x4016 ... 0x4017: // legacy controller
 			case 0x4200 ... 0x421f: // dma
 			case 0x4300 ... 0x437f: // cpu mmio
@@ -300,6 +440,7 @@ void bus_write(Bus *bus, uint32_t addr, uint8_t val) {
 			case 0x2100 ... 0x213f: // ppu mmio
 				ppu_bus_write(bus->ppu, offset, val);
 				break;
+			case 0x2180 ... 0x2183: // wram mmio
 			case 0x4016 ... 0x4017: // legacy controller
 			case 0x4200 ... 0x421f: // dma
 			case 0x4300 ... 0x437f: // cpu mmio
