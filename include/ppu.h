@@ -102,6 +102,23 @@ typedef struct PPU {
 	int16_t m7b;
 	uint8_t m7_latch;
 
+	uint8_t wh0, wh1;
+	uint8_t wh2, wh3;
+	uint8_t w12sel;
+	uint8_t w34sel;
+	uint8_t wobjsel;
+	uint8_t wbglog;
+	uint8_t wobjlog;
+	uint8_t tmw;
+	uint8_t tsw;
+
+	uint16_t latched_h;
+	uint16_t latched_v;
+	bool h_loc_toggle;
+	bool v_loc_toggle;
+	bool location_latched;
+	uint16_t vram_read_buf;
+
 	bool forced_blank;
 	uint8_t brightness;
 

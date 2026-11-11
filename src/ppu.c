@@ -72,10 +72,76 @@ uint8_t ppu_bus_read(PPU *ppu, uint32_t addr) {
 	case 0x2136: // mpyh
 		prod = (int16_t)ppu->m7a * (int8_t)(ppu->m7b >> 8);
 		return (prod >> 16) & 0xff;
+	case 0x2137: // slhv: latch beam position
+		ppu->latched_h = ppu->dot;
+		ppu->latched_v = ppu->scanline;
+		ppu->location_latched = true;
+		return ppu->bus->open_bus;
+	case 0x2138: { // oamdataread
+		uint16_t oam_addr = (ppu->oamaddr_in < 512) ? ppu->oamaddr_in : (0x200 | (ppu->oamaddr_in & 0x1f));
+		uint8_t val = ppu->oam[oam_addr];
+		ppu->oamaddr_in = (ppu->oamaddr_in + 1) & 0x3ff;
+		return val;
+	}
+	case 0x2139: { // vmdatalread
+		uint8_t val = ppu->vram_read_buf & 0xff;
+		if (!ppu->vmain.inc) {
+			uint16_t eff = vram_effective_addr(ppu->vmadd, ppu->vmain.remap);
+			ppu->vram_read_buf = ppu->vram[eff << 1] | (ppu->vram[eff << 1 | 1] << 8);
+			ppu->vmadd = (ppu->vmadd + ppu->vmain_inc) & 0x7fff;
+		}
+		return val;
+	}
+	case 0x213a: { // vmdatahread
+		uint8_t val = (ppu->vram_read_buf >> 8) & 0xff;
+		if (ppu->vmain.inc) {
+			uint16_t eff = vram_effective_addr(ppu->vmadd, ppu->vmain.remap);
+			ppu->vram_read_buf = ppu->vram[eff << 1] | (ppu->vram[eff << 1 | 1] << 8);
+			ppu->vmadd = (ppu->vmadd + ppu->vmain_inc) & 0x7fff;
+		}
+		return val;
+	}
+	case 0x213b: { // cgdataread
+		uint8_t val;
+		if (ppu->cgram_toggle) {
+			val = (ppu->cgram[ppu->cgadd].raw >> 8) & 0x7f;
+			ppu->cgadd++;
+		} else {
+			val = ppu->cgram[ppu->cgadd].raw & 0xff;
+		}
+		ppu->cgram_toggle = !ppu->cgram_toggle;
+		return val;
+	}
+	case 0x213c: { // ophct: horizontal scanline location
+		uint8_t val;
+		if (!ppu->h_loc_toggle) {
+			val = ppu->latched_h & 0xff;
+		} else {
+			val = ((ppu->latched_h >> 8) & 1) | (ppu->bus->open_bus & 0xfe);
+		}
+		ppu->h_loc_toggle = !ppu->h_loc_toggle;
+		return val;
+	}
+	case 0x213d: { // opvct: vertical scanline location
+		uint8_t val;
+		if (!ppu->v_loc_toggle) {
+			val = ppu->latched_v & 0xff;
+		} else {
+			val = ((ppu->latched_v >> 8) & 1) | (ppu->bus->open_bus & 0xfe);
+		}
+		ppu->v_loc_toggle = !ppu->v_loc_toggle;
+		return val;
+	}
+	case 0x213e: // stat77
+		return 0x01; // ppu1 version 1
 	case 0x213f:
-		return (ppu->frame_count & 1) << 7 | 0x01; // ntsc, ppu rev 1
-		default:
-			return ppu->bus->open_bus;
+		ppu->h_loc_toggle = false;
+		ppu->v_loc_toggle = false;
+		uint8_t res = (ppu->frame_count & 1) << 7 | (ppu->location_latched ? 0x40 : 0) | 0x01;
+		ppu->location_latched = false;
+		return res;
+	default:
+		return ppu->bus->open_bus;
 	}
 }
 
@@ -149,21 +215,23 @@ void ppu_bus_write(PPU *ppu, uint32_t addr, uint8_t val) {
 			ppu->scroll_latch = val;
 			break;
 		}
-		case 0x211b:
-			ppu->m7a = (val << 8) | ppu->m7_latch;
-			ppu->m7_latch = val;
-			break;
-		case 0x211c:
-			ppu->m7b = (val << 8) | ppu->m7_latch;
-			ppu->m7_latch = val;
-			break;
 		case 0x2115:
 			ppu->vmain.raw = val;
 			static const uint8_t PPU_VMAIN_INC[4] = { 1, 32, 128, 128 };
 			ppu->vmain_inc = PPU_VMAIN_INC[ppu->vmain.step];
 			break;
-		case 0x2116: ppu->vmaddl = val; break;
-		case 0x2117: ppu->vmaddh = val; break;
+		case 0x2116: {
+			ppu->vmaddl = val;
+			uint16_t eff = vram_effective_addr(ppu->vmadd, ppu->vmain.remap);
+			ppu->vram_read_buf = ppu->vram[eff << 1] | (ppu->vram[eff << 1 | 1] << 8);
+			break;
+		}
+		case 0x2117: {
+			ppu->vmaddh = val;
+			uint16_t eff = vram_effective_addr(ppu->vmadd, ppu->vmain.remap);
+			ppu->vram_read_buf = ppu->vram[eff << 1] | (ppu->vram[eff << 1 | 1] << 8);
+			break;
+		}
 		case 0x2118:
 			ppu->vram[vram_effective_addr(ppu->vmadd, ppu->vmain.remap) << 1] = val;
 			if (!ppu->vmain.inc) ppu->vmadd = (ppu->vmadd + ppu->vmain_inc) & 0x7fff;
@@ -171,6 +239,14 @@ void ppu_bus_write(PPU *ppu, uint32_t addr, uint8_t val) {
 		case 0x2119:
 			ppu->vram[vram_effective_addr(ppu->vmadd, ppu->vmain.remap) << 1 | 1] = val;
 			if (ppu->vmain.inc) ppu->vmadd = (ppu->vmadd + ppu->vmain_inc) & 0x7fff;
+			break;
+		case 0x211b:
+			ppu->m7a = (val << 8) | ppu->m7_latch;
+			ppu->m7_latch = val;
+			break;
+		case 0x211c:
+			ppu->m7b = (val << 8) | ppu->m7_latch;
+			ppu->m7_latch = val;
 			break;
 		case 0x2121:
 			ppu->cgadd = val;
@@ -186,7 +262,18 @@ void ppu_bus_write(PPU *ppu, uint32_t addr, uint8_t val) {
 				ppu->cgram_toggle = false;
 			}
 			break;
+		case 0x2123: ppu->w12sel = val; break;
+		case 0x2124: ppu->w34sel = val; break;
+		case 0x2125: ppu->wobjsel = val; break;
+		case 0x2126: ppu->wh0 = val; break;
+		case 0x2127: ppu->wh1 = val; break;
+		case 0x2128: ppu->wh2 = val; break;
+		case 0x2129: ppu->wh3 = val; break;
+		case 0x212a: ppu->wbglog = val; break;
+		case 0x212b: ppu->wobjlog = val; break;
 		case 0x212d: ppu->sub_screen_en = val & 0x1f; break;
+		case 0x212e: ppu->tmw = val & 0x1f; break;
+		case 0x212f: ppu->tsw = val & 0x1f; break;
 		case 0x2130: ppu->cgwsel = val; break;
 		case 0x2131: ppu->cgadsub = val; break;
 		case 0x2132:
@@ -215,6 +302,38 @@ void ppu_eval_sprites(PPU *ppu) {
 			ppu->line_sprites[ppu->line_sprites_count++] = i;
 		}
 	}
+}
+
+static bool ppu_eval_window(PPU *ppu, int layer, int x) {
+	// extract the 4 setting bits for this layer
+	uint8_t sel = (layer < 2) ?
+		ppu->w12sel : ((layer < 4) ? ppu->w34sel : ppu->wobjsel);
+	uint8_t cfg = (sel >> ((layer & 1) ? 4 : 0)) & 0x0f;
+
+	bool w1_inv = (cfg & 0x01) != 0;
+	bool w1_en  = (cfg & 0x02) != 0;
+	bool w2_inv = (cfg & 0x04) != 0;
+	bool w2_en  = (cfg & 0x08) != 0;
+
+	if (!w1_en && !w2_en) return false;
+
+	bool w1 = (ppu->wh0 <= ppu->wh1) ? (x >= ppu->wh0 && x <= ppu->wh1) : false;
+	if (w1_inv) w1 = !w1;
+
+	bool w2 = (ppu->wh2 <= ppu->wh3) ? (x >= ppu->wh2 && x <= ppu->wh3) : false;
+	if (w2_inv) w2 = !w2;
+
+	if (w1_en && w2_en) {
+		uint8_t log = (layer < 4) ? (ppu->wbglog >> (layer * 2)) :
+		(ppu->wobjlog >> ((layer - 4) * 2));
+		switch (log & 3) {
+			case 0: return w1 || w2;   // or
+			case 1: return w1 && w2;   // and
+			case 2: return w1 ^ w2;    // xor
+			case 3: return !(w1 ^ w2); // xnor
+		}
+	}
+	return w1_en ? w1 : w2;
 }
 
 void ppu_render_dot(PPU *ppu) {
@@ -272,12 +391,16 @@ void ppu_render_dot(PPU *ppu) {
 
 			uint8_t prio_lay = SPRITE_PRIO[ppu->bg_mode][ppu->sprites.lt[s].pr];
 			uint16_t cgram_idx = 128 + (ppu->sprites.lt[s].pa * 16) + color_idx;
-			if (ppu->main_screen_en & 0x10) {
+
+			bool mask = ppu_eval_window(ppu, 4, sx);
+			bool on_main = (ppu->main_screen_en & 0x10) && !((ppu->tmw & 0x10) && mask);
+			bool on_sub  = (ppu->sub_screen_en & 0x10)  && !((ppu->tsw & 0x10) && mask);
+
+			if (on_main) {
 				main_lay[prio_lay] = ppu->cgram[cgram_idx];
-				// color math only if palette 4-7
 				main_src[prio_lay] = (ppu->sprites.lt[s].pa >= 4) ? 4 : 6;
 			}
-			if (ppu->sub_screen_en & 0x10) {
+			if (on_sub) {
 				sub_lay[prio_lay] = ppu->cgram[cgram_idx];
 			}
 
@@ -287,7 +410,12 @@ void ppu_render_dot(PPU *ppu) {
 
 	for (int bg = 0; bg < 4; bg++) {
 		uint8_t layer_bpp = PPU_BG_BPP[ppu->bg_mode][bg];
-		if (layer_bpp == 0 || ppu->forced_blank) continue;
+		bool mask = ppu_eval_window(ppu, bg, sx);
+		bool on_main = ((ppu->main_screen_en >> bg) & 1) && !(((ppu->tmw >> bg) & 1) && mask);
+		bool on_sub  = ((ppu->sub_screen_en >> bg) & 1)  && !(((ppu->tsw >> bg) & 1) && mask);
+
+		// if not enabled or masked on both, skip
+		if (layer_bpp == 0 || (!on_main && !on_sub) || ppu->forced_blank) continue;
 		if (((ppu->main_screen_en >> bg) & 1) == 0 && ((ppu->sub_screen_en >> bg) & 1) == 0) continue;
 
 		int px = (sx + ppu->bg[bg].h_scroll) & 0x3ff;
@@ -368,11 +496,12 @@ void ppu_render_dot(PPU *ppu) {
 				break;
 			}
 		}
-		if ((ppu->main_screen_en >> bg) & 1) {
+
+		if (on_main) {
 			main_lay[prio_lay] = bg_col;
 			main_src[prio_lay] = bg;
 		}
-		if ((ppu->sub_screen_en >> bg) & 1) {
+		if (on_sub) {
 			sub_lay[prio_lay] = bg_col;
 		}
 	}
@@ -400,9 +529,19 @@ void ppu_render_dot(PPU *ppu) {
 		}
 	}
 
-	// check if color math enabled on this layer
+	bool math_win = ppu_eval_window(ppu, 5, sx);
+
+	uint8_t clip_mode = (ppu->cgwsel >> 6) & 3;
+	if ((clip_mode == 1 && !math_win) || (clip_mode == 2 && math_win) || (clip_mode == 3)) {
+		main_col.raw = 0;
+	}
+
+	// prevent mode skips color math
+	uint8_t prev_mode = (ppu->cgwsel >> 4) & 3;
+	bool prevent_math = (prev_mode == 1 && !math_win) || (prev_mode == 2 && math_win) || (prev_mode == 3);
+
 	Color15 final_col = main_col;
-	if (ppu->cgadsub & (1 << main_source)) {
+	if (!prevent_math && (ppu->cgadsub & (1 << main_source))) {
 		// subscreen vs fixed color
 		Color15 col_b = (ppu->cgwsel & 0x02 && has_sub) ? sub_col : ppu->fixed_color;
 

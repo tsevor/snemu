@@ -79,19 +79,21 @@ void bus_exec_dma(Bus *bus, int ch) {
 	while (bus->dmachan[ch].das != 0) {
 		uint16_t b_addr = 0x2100 | (bus->dmachan[ch].bbad + DMA_OFFS[bus->dmachan[ch].mode][i++ & 3]);
 		uint32_t a_addr = (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a1t;
-		// using cpu funcs because they auto-clock
 		if (bus->dmachan[ch].invert) {
-			cpu_write(bus->cpu, a_addr, cpu_read(bus->cpu, b_addr));
+			bus_write(bus, a_addr, bus_read(bus, b_addr));
 		} else {
-			cpu_write(bus->cpu, b_addr, cpu_read(bus->cpu, a_addr));
+			bus_write(bus, b_addr, bus_read(bus, a_addr));
 		}
 		if (!bus->dmachan[ch].fixed) bus->dmachan[ch].a1t += bus->dmachan[ch].decrement ? -1 : 1;
 		bus->dmachan[ch].das--;
+
+		bus->last_wr_cycles = 8;
+		bus_clock(bus);
 	}
 }
 
 void bus_exec_hdma(Bus *bus) {
-	uint8_t active = bus->hdma_active & bus->hdmaen & ~bus->hdma_stopped;
+	uint8_t active = bus->hdmaen & ~bus->hdma_stopped;
 	if (!active) return;
 
 	for (int ch = 0; ch < 8; ch++) {
@@ -143,35 +145,33 @@ void bus_exec_hdma(Bus *bus) {
 	}
 }
 
+
+static void bus_init_hdma_channel(Bus *bus, int ch) {
+	bus->dmachan[ch].a2a = bus->dmachan[ch].a1t;
+	uint32_t table_addr = (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++;
+	bus->dmachan[ch].ntrl = bus_read(bus, table_addr);
+
+	if (bus->dmachan[ch].ntrl == 0) {
+		bus->hdma_stopped |= (1 << ch);
+		return;
+	}
+
+	if (bus->dmachan[ch].hdma_ind) {
+		uint8_t lsb = bus_read(bus, (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++);
+		uint8_t msb = bus_read(bus, (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++);
+		bus->dmachan[ch].das = (msb << 8) | lsb;
+	}
+
+	bus->hdma_do_transfer[ch] = true;
+}
+
 void bus_init_hdma(Bus *bus) {
-	bus->hdma_active = bus->hdmaen;
 	bus->hdma_stopped = 0;
 	for (int ch = 0; ch < 8; ch++) {
 		bus->hdma_do_transfer[ch] = false;
-	}
-
-	if (!bus->hdma_active) return;
-
-	for (int ch = 0; ch < 8; ch++) {
-		if (!(bus->hdma_active & (1 << ch))) continue;
-
-		bus->dmachan[ch].a2a = bus->dmachan[ch].a1t;
-
-		uint32_t table_addr = (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++;
-		bus->dmachan[ch].ntrl = bus_read(bus, table_addr);
-
-		if (bus->dmachan[ch].ntrl == 0) {
-			bus->hdma_stopped |= (1 << ch);
-			continue;
+		if (bus->hdmaen & (1 << ch)) {
+			bus_init_hdma_channel(bus, ch);
 		}
-
-		if (bus->dmachan[ch].hdma_ind) {
-			uint8_t lsb = bus_read(bus, (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++);
-			uint8_t msb = bus_read(bus, (bus->dmachan[ch].a1b << 16) | bus->dmachan[ch].a2a++);
-			bus->dmachan[ch].das = (msb << 8) | lsb;
-		}
-
-		bus->hdma_do_transfer[ch] = true;
 	}
 }
 
@@ -190,6 +190,7 @@ void bus_trigger_vblank(Bus *bus) {
 
 void bus_clear_vblank(Bus *bus) {
 	bus->vblank_started = false;
+	bus->vblank_flag = false;
 }
 
 void bus_check_irq(Bus *bus) {
@@ -236,8 +237,7 @@ static uint8_t bus_read_cpu_io(Bus *bus, uint16_t addr) {
 		case 0x4017: // legacy controller 2
 			return 0;
 		case 0x4210: // rdnmi
-			bus->cpu_ver = 0x02; // cpu 5a22 v2
-			res = bus->rdnmi;
+			res = (bus->vblank_flag ? 0x80 : 0) | 0x02 | (bus->open_bus & 0x70);
 			bus->vblank_flag = false;
 			return res;
 		case 0x4211: // timeup
@@ -245,8 +245,11 @@ static uint8_t bus_read_cpu_io(Bus *bus, uint16_t addr) {
 			bus->timeup = 0;
 			bus->cpu->irq_pending = false;
 			return res;
-		case 0x4212: // auto-poll done
-			return bus->open_bus & ~1;
+		case 0x4212: {
+			uint8_t in_vblank = (bus->ppu->scanline >= 225) ? 0x80 : 0;
+			uint8_t in_hblank = (bus->ppu->dot < 1 || bus->ppu->dot >= 274) ? 0x40 : 0;
+			return in_vblank | in_hblank | (bus->open_bus & 0x3e);
+		}
 		case 0x4214: // rddivl
 			return bus->rddivl;
 		case 0x4215: // rddivh
@@ -358,9 +361,17 @@ static void bus_write_cpu_io(Bus *bus, uint16_t addr, uint8_t val) {
 				if (val & (1 << ch)) bus_exec_dma(bus, ch);
 			}
 			break;
-		case 0x420c: // hdmaen
+		case 0x420c: { // hdmaen
+			uint8_t newly_enabled = val & ~bus->hdmaen;
 			bus->hdmaen = val;
+			for (int ch = 0; ch < 8; ch++) {
+				if (newly_enabled & (1 << ch)) {
+					bus->hdma_stopped &= ~(1 << ch);
+					bus_init_hdma_channel(bus, ch);
+				}
+			}
 			break;
+		}
 		case 0x4300 ... 0x430a:
 		case 0x4310 ... 0x431a:
 		case 0x4320 ... 0x432a:
@@ -388,7 +399,6 @@ static void bus_write_cpu_io(Bus *bus, uint16_t addr, uint8_t val) {
 
 uint8_t bus_read(Bus *bus, uint32_t addr) {
 	if ((addr & 0x408000) == 0x000000) { // bottom half q1/q3
-		bus->last_wr_cycles = 12;
 		uint16_t offset = addr & 0xffff;
 		switch (offset) { // aux
 			case 0x0000 ... 0x1fff: // wram mirror
@@ -396,9 +406,11 @@ uint8_t bus_read(Bus *bus, uint32_t addr) {
 				bus->open_bus = bus->wram[offset];
 				break;
 			case 0x2100 ... 0x213f: // ppu mmio
+				bus->last_wr_cycles = 6;
 				bus->open_bus = ppu_bus_read(bus->ppu, offset);
 				break;
 			case 0x2140 ... 0x217f: // spc mmio
+				bus->last_wr_cycles = 6;
 				bus->open_bus = spc_read_io_port(bus->spc, offset & 3);
 				break;
 			case 0x2180 ... 0x2183: // wram mmio
@@ -408,7 +420,6 @@ uint8_t bus_read(Bus *bus, uint32_t addr) {
 				bus->last_wr_cycles = 6;
 				bus->open_bus = bus_read_cpu_io(bus, offset);
 				break;
-			// TODO: dma and joypad mmio
 			default: // allow cart to take over
 				bus->open_bus = cart_read(bus->cart, addr);
 				break;
@@ -427,7 +438,6 @@ void bus_write(Bus *bus, uint32_t addr, uint8_t val) {
 	bus->last_wr_cycles = 8;
 	bus->open_bus = val;
 	if (!(addr & 0x408000)) { // bottom half q1/q3
-		bus->last_wr_cycles = 12;
 		uint16_t offset = addr & 0xffff;
 		switch (offset) { // aux
 			case 0x0000 ... 0x1fff: // wram mirror
@@ -435,18 +445,20 @@ void bus_write(Bus *bus, uint32_t addr, uint8_t val) {
 				bus->wram[offset] = val;
 				break;
 			case 0x2140 ... 0x217f: // spc mmio
+				bus->last_wr_cycles = 6;
 				spc_write_io_port(bus->spc, offset & 3, val);
 				break;
 			case 0x2100 ... 0x213f: // ppu mmio
+				bus->last_wr_cycles = 6;
 				ppu_bus_write(bus->ppu, offset, val);
 				break;
 			case 0x2180 ... 0x2183: // wram mmio
 			case 0x4016 ... 0x4017: // legacy controller
 			case 0x4200 ... 0x421f: // dma
 			case 0x4300 ... 0x437f: // cpu mmio
+				bus->last_wr_cycles = 6;
 				bus_write_cpu_io(bus, offset, val);
 				break;
-			// TODO: dma and joypad mmio
 			default: // allow cart to take over
 				cart_write(bus->cart, addr, val);
 				break;
