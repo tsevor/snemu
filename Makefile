@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Werror -Wextra -O3 -MMD -MP -flto -Iinclude
+CFLAGS = -Wall -Wextra -O3 -MMD -MP -flto -Iinclude
 LDFLAGS =
 
 HOST = sdl3

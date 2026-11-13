@@ -1,8 +1,6 @@
 #include "host.h"
 #include "log.h"
 
-#include <SDL3/SDL_events.h>
-#include <SDL3/SDL_scancode.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -306,7 +304,7 @@ void host_swap_buffer() {
 }
 
 void host_copy_buffer() {
-	mempcpy(host.buffer_front, host.buffer_back, SNES_WIDTH * SNES_HEIGHT * sizeof(uint32_t));
+	memcpy(host.buffer_front, host.buffer_back, SNES_WIDTH * SNES_HEIGHT * sizeof(uint32_t));
 }
 
 void host_queue_audio_buffer(int16_t *buffer, size_t len) {
